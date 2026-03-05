@@ -1,0 +1,192 @@
+"""Core methods: ShortcutScore computation, Reweighting, and Gradient Surgery."""
+import torch
+import torch.nn.functional as F
+from src.config import Config as C
+
+
+def get_grad_vector(model):
+    """Concatenate all parameter gradients into a single vector."""
+    grads = []
+    for p in model.parameters():
+        if p.requires_grad:
+            if p.grad is not None:
+                grads.append(p.grad.flatten())
+            else:
+                grads.append(torch.zeros(p.numel(), device=p.device))
+    return torch.cat(grads)
+
+
+def set_grad_vector(model, grad_vec):
+    """Set model parameter gradients from a single vector."""
+    offset = 0
+    for p in model.parameters():
+        if p.requires_grad:
+            numel = p.numel()
+            p.grad = grad_vec[offset:offset + numel].reshape(p.shape).clone()
+            offset += numel
+
+
+def masked_ce_loss(logits, targets, mask):
+    """Compute masked cross-entropy loss.
+
+    Args:
+        logits: (B, T, V) model output logits
+        targets: (B, T) target token ids
+        mask: (B, T) loss mask (1 where loss should be computed)
+    Returns:
+        scalar loss (mean over masked positions)
+    """
+    B, T, V = logits.shape
+    loss_per_token = F.cross_entropy(
+        logits.reshape(-1, V), targets.reshape(-1), reduction='none'
+    ).reshape(B, T)
+    masked_loss = loss_per_token * mask
+    denom = mask.sum().clamp(min=1.0)
+    return masked_loss.sum() / denom
+
+
+def compute_validation_gradient(model, val_loader, device=C.device):
+    """Compute average gradient over the validation set.
+
+    Returns:
+        g_V: (num_params,) average validation gradient vector
+    """
+    model.eval()
+    g_V = None
+    n_batches = 0
+
+    for batch in val_loader:
+        input_ids = batch['input_ids'].to(device)
+        target_ids = batch['target_ids'].to(device)
+        loss_mask = batch['loss_mask'].to(device)
+
+        model.zero_grad()
+        logits = model(input_ids)
+        loss = masked_ce_loss(logits, target_ids, loss_mask)
+        loss.backward()
+
+        grad = get_grad_vector(model)
+        if g_V is None:
+            g_V = grad.clone()
+        else:
+            g_V += grad
+        n_batches += 1
+
+    model.train()
+    return g_V / max(n_batches, 1)
+
+
+def compute_sample_gradients(model, input_ids, target_ids, loss_mask, answer_mask,
+                              reasoning_mask, device=C.device):
+    """Compute full, answer, and reasoning gradients for a single sample.
+
+    Args:
+        input_ids: (T,) single sample input
+        target_ids: (T,) single sample target
+        loss_mask, answer_mask, reasoning_mask: (T,) masks
+
+    Returns:
+        g_full, g_ans, g_reason: gradient vectors
+    """
+    inp = input_ids.unsqueeze(0).to(device)
+    tgt = target_ids.unsqueeze(0).to(device)
+    lm = loss_mask.unsqueeze(0).to(device)
+    am = answer_mask.unsqueeze(0).to(device)
+    rm = reasoning_mask.unsqueeze(0).to(device)
+
+    # Full gradient
+    model.zero_grad()
+    logits = model(inp)
+    full_loss = masked_ce_loss(logits, tgt, lm)
+    full_loss.backward(retain_graph=True)
+    g_full = get_grad_vector(model).clone()
+
+    # Answer gradient
+    model.zero_grad()
+    ans_loss = masked_ce_loss(logits, tgt, am)
+    if am.sum() > 0:
+        ans_loss.backward(retain_graph=True)
+        g_ans = get_grad_vector(model).clone()
+    else:
+        g_ans = torch.zeros_like(g_full)
+
+    # Reasoning gradient
+    model.zero_grad()
+    reason_loss = masked_ce_loss(logits, tgt, rm)
+    if rm.sum() > 0:
+        reason_loss.backward()
+        g_reason = get_grad_vector(model).clone()
+    else:
+        g_reason = torch.zeros_like(g_full)
+
+    return g_full, g_ans, g_reason
+
+
+def compute_shortcut_score(g_full, g_ans, g_reason, g_V):
+    """Compute ShortcutScore S(s) = alpha * B(s) + beta * C(s).
+
+    Args:
+        g_full: (D,) full sample gradient
+        g_ans: (D,) answer-token gradient
+        g_reason: (D,) reasoning-token gradient
+        g_V: (D,) validation gradient
+
+    Returns:
+        S, B_val, C_val, A_val, R_val: score and components
+    """
+    # Alignment A(s) = cos(g_full, g_V)
+    norm_full = g_full.norm()
+    norm_V = g_V.norm()
+    if norm_full < 1e-10 or norm_V < 1e-10:
+        A_val = 0.0
+    else:
+        A_val = (g_full @ g_V / (norm_full * norm_V)).item()
+
+    # Non-transfer alignment B(s) = max(0, tau_A - A(s))
+    B_val = max(0.0, C.tau_A - A_val)
+
+    # Concentration R(s) = ||g_ans|| / (||g_ans|| + ||g_reason||)
+    norm_ans = g_ans.norm().item()
+    norm_reason = g_reason.norm().item()
+    denom = norm_ans + norm_reason
+    R_val = norm_ans / denom if denom > 1e-10 else 0.5
+
+    # Answer-gradient concentration C(s) = max(0, R(s) - tau_R)
+    C_val = max(0.0, R_val - C.tau_R)
+
+    # ShortcutScore
+    S = C.alpha * B_val + C.beta * C_val
+    return S, B_val, C_val, A_val, R_val
+
+
+def compute_sample_weight(S):
+    """Compute sample weight w(s) = exp(-lambda * S(s))."""
+    return torch.tensor(max(1e-6, torch.exp(torch.tensor(-C.lambda_ * S)).item()))
+
+
+def apply_gradient_surgery(g_full, g_ans, g_V, B_val, C_val):
+    """Apply Gradient Surgery: projection and/or suppression.
+
+    Args:
+        g_full: (D,) full sample gradient
+        g_ans: (D,) answer gradient
+        g_V: (D,) validation gradient
+        B_val: alignment score B(s)
+        C_val: concentration score C(s)
+
+    Returns:
+        g_modified: (D,) surgically modified gradient
+    """
+    g_mod = g_full.clone()
+
+    # 1. Gradient Alignment Projection (if low alignment)
+    if B_val > 0:
+        gv_norm_sq = (g_V @ g_V).clamp(min=1e-10)
+        proj_coeff = (g_mod @ g_V) / gv_norm_sq
+        g_mod = g_mod - C.gamma * proj_coeff * g_V
+
+    # 2. Answer-Gradient Suppression (if high concentration)
+    if C_val > 0:
+        g_mod = g_mod - C.rho * g_ans
+
+    return g_mod
