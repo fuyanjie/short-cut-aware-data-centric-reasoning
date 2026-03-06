@@ -16,7 +16,7 @@ import numpy as np
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.config import Config as C
+from src.config import Config as C, PROFILE
 from src.data import (generate_math_dataset, generate_financial_dataset,
                       generate_causal_dataset, get_dataloader)
 from src.model import create_model, count_parameters
@@ -30,7 +30,9 @@ def set_seed(seed=C.seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.backends.mps.is_available():
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    elif torch.backends.mps.is_available():
         torch.mps.manual_seed(seed)
 
 
@@ -39,8 +41,19 @@ def main():
     print('Gradient-Aware Shortcut Detection and Correction')
     print('Experimental Evaluation')
     print('=' * 70)
+    print(f'Profile: {PROFILE}')
     print(f'Device: {C.device}')
+    if C.device == 'cuda':
+        n_gpus = torch.cuda.device_count()
+        print(f'GPUs: {n_gpus}')
+        for i in range(n_gpus):
+            print(f'  GPU {i}: {torch.cuda.get_device_name(i)} '
+                  f'({torch.cuda.get_device_properties(i).total_mem / 1e9:.1f} GB)')
     print(f'Seed: {C.seed}')
+    print(f'Model: d={C.d_model}, layers={C.num_layers}, heads={C.nhead}, ff={C.d_ff}')
+    print(f'Data: train={C.n_train}, val={C.n_val}, test={C.n_test}')
+    print(f'Training: bs={C.batch_size}, lr={C.lr}, epochs={C.epochs}')
+    print(f'Scoring: max_samples={C.score_max_samples}, batch_size={C.score_batch_size}')
 
     # Check model size
     tmp_model = create_model('cpu')
@@ -136,7 +149,9 @@ def main():
 
         # Clean up to save memory
         del model_ft, model_df, model_ours
-        if C.device == 'mps':
+        if C.device == 'cuda':
+            torch.cuda.empty_cache()
+        elif C.device == 'mps':
             torch.mps.empty_cache()
 
     # ===================================================================
@@ -182,7 +197,9 @@ def main():
               f'Robustness: {results_gs["robustness"]:.3f}')
 
         del model_rw, model_gs
-        if C.device == 'mps':
+        if C.device == 'cuda':
+            torch.cuda.empty_cache()
+        elif C.device == 'mps':
             torch.mps.empty_cache()
 
     # Also compute gradient alignment for standard_ft baseline

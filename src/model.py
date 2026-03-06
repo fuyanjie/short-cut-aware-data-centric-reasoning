@@ -1,4 +1,7 @@
-"""Small GPT-like transformer for sequence prediction."""
+"""Small GPT-like transformer for sequence prediction.
+
+Supports multi-GPU via DataParallel when CUDA is available.
+"""
 import math
 import torch
 import torch.nn as nn
@@ -82,10 +85,23 @@ class SmallGPT(nn.Module):
 
 
 def create_model(device=C.device):
-    """Create and return a new SmallGPT model on the specified device."""
+    """Create and return a new SmallGPT model on the specified device.
+
+    On multi-GPU CUDA systems, wraps the model with DataParallel for
+    forward pass parallelism. Note: gradient surgery operates on the
+    unwrapped model for correct per-parameter gradient access.
+    """
     model = SmallGPT().to(device)
     return model
 
 
+def unwrap_model(model):
+    """Get the underlying model from DataParallel wrapper, if any."""
+    if isinstance(model, nn.DataParallel):
+        return model.module
+    return model
+
+
 def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+    m = unwrap_model(model)
+    return sum(p.numel() for p in m.parameters() if p.requires_grad)

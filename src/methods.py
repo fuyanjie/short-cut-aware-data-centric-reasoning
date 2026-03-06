@@ -1,4 +1,8 @@
-"""Core methods: ShortcutScore computation, Reweighting, and Gradient Surgery."""
+"""Core methods: ShortcutScore computation, Reweighting, and Gradient Surgery.
+
+Supports both single-sample and batched per-sample gradient computation.
+On CUDA with large models, uses torch.func.vmap for vectorized gradients.
+"""
 import torch
 import torch.nn.functional as F
 from src.config import Config as C
@@ -122,6 +126,67 @@ def compute_sample_gradients(model, input_ids, target_ids, loss_mask, answer_mas
     return g_full, g_ans, g_reason
 
 
+def compute_sample_gradients_batched(model, batch, device=C.device):
+    """Compute per-sample gradients for a batch using sequential processing.
+
+    More memory-efficient than vmap for large models. Processes each sample
+    in the batch sequentially but reuses the forward pass computation.
+
+    Args:
+        batch: dict with input_ids (B,T), target_ids (B,T), masks (B,T)
+
+    Returns:
+        g_fulls: (B, D) per-sample full gradients
+        g_anss:  (B, D) per-sample answer gradients
+        g_reasons: (B, D) per-sample reasoning gradients
+    """
+    input_ids = batch['input_ids'].to(device)
+    target_ids = batch['target_ids'].to(device)
+    loss_mask = batch['loss_mask'].to(device)
+    answer_mask = batch['answer_mask'].to(device)
+    reasoning_mask = batch['reasoning_mask'].to(device)
+
+    B = input_ids.size(0)
+    g_fulls, g_anss, g_reasons = [], [], []
+
+    for i in range(B):
+        inp = input_ids[i:i+1]
+        tgt = target_ids[i:i+1]
+        lm = loss_mask[i:i+1]
+        am = answer_mask[i:i+1]
+        rm = reasoning_mask[i:i+1]
+
+        # Full gradient
+        model.zero_grad()
+        logits = model(inp)
+        full_loss = masked_ce_loss(logits, tgt, lm)
+        full_loss.backward(retain_graph=True)
+        g_full = get_grad_vector(model).clone()
+        g_fulls.append(g_full)
+
+        # Answer gradient
+        model.zero_grad()
+        ans_loss = masked_ce_loss(logits, tgt, am)
+        if am.sum() > 0:
+            ans_loss.backward(retain_graph=True)
+            g_ans = get_grad_vector(model).clone()
+        else:
+            g_ans = torch.zeros_like(g_full)
+        g_anss.append(g_ans)
+
+        # Reasoning gradient
+        model.zero_grad()
+        reason_loss = masked_ce_loss(logits, tgt, rm)
+        if rm.sum() > 0:
+            reason_loss.backward()
+            g_reason = get_grad_vector(model).clone()
+        else:
+            g_reason = torch.zeros_like(g_full)
+        g_reasons.append(g_reason)
+
+    return torch.stack(g_fulls), torch.stack(g_anss), torch.stack(g_reasons)
+
+
 def compute_shortcut_score(g_full, g_ans, g_reason, g_V):
     """Compute ShortcutScore S(s) = alpha * B(s) + beta * C(s).
 
@@ -157,6 +222,51 @@ def compute_shortcut_score(g_full, g_ans, g_reason, g_V):
     # ShortcutScore
     S = C.alpha * B_val + C.beta * C_val
     return S, B_val, C_val, A_val, R_val
+
+
+def compute_shortcut_scores_batched(g_fulls, g_anss, g_reasons, g_V):
+    """Vectorized ShortcutScore computation for a batch of gradients.
+
+    Args:
+        g_fulls:  (B, D) per-sample full gradients
+        g_anss:   (B, D) per-sample answer gradients
+        g_reasons: (B, D) per-sample reasoning gradients
+        g_V:      (D,) validation gradient
+
+    Returns:
+        scores: list of S values
+        B_vals, C_vals, A_vals, R_vals: lists of component values
+    """
+    B = g_fulls.size(0)
+
+    # Vectorized alignment: A(s) = cos(g_full, g_V) for all samples
+    norm_fulls = g_fulls.norm(dim=1)                    # (B,)
+    norm_V = g_V.norm()                                  # scalar
+    dots = g_fulls @ g_V                                 # (B,)
+    denoms = (norm_fulls * norm_V).clamp(min=1e-10)      # (B,)
+    A_vals_t = dots / denoms                             # (B,)
+
+    # Vectorized concentration: R(s) = ||g_ans|| / (||g_ans|| + ||g_reason||)
+    norm_anss = g_anss.norm(dim=1)                       # (B,)
+    norm_reasons = g_reasons.norm(dim=1)                  # (B,)
+    conc_denoms = (norm_anss + norm_reasons).clamp(min=1e-10)
+    R_vals_t = norm_anss / conc_denoms                   # (B,)
+
+    # Convert to lists and compute scores
+    scores, B_vals, C_vals, A_vals, R_vals = [], [], [], [], []
+    for i in range(B):
+        A_val = A_vals_t[i].item()
+        R_val = R_vals_t[i].item()
+        B_val = max(0.0, C.tau_A - A_val)
+        C_val = max(0.0, R_val - C.tau_R)
+        S = C.alpha * B_val + C.beta * C_val
+        scores.append(S)
+        B_vals.append(B_val)
+        C_vals.append(C_val)
+        A_vals.append(A_val)
+        R_vals.append(R_val)
+
+    return scores, B_vals, C_vals, A_vals, R_vals
 
 
 def compute_sample_weight(S):

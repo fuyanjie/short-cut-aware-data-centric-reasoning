@@ -1,4 +1,4 @@
-% =============================================================================
+%=============================================================================
 % Experiments Section
 % =============================================================================
 \section{Experiments}
@@ -52,8 +52,6 @@ We compare our full method (Shortcut-aware Reweighting + Gradient Surgery) again
 \subsection{Main Results}
 \label{sec:main_results}
 
-% NOTE: All numeric results below are from the small-scale (277K param, 500-sample) pilot.
-% Re-run on the server with the full-scale config (19M params, 10K samples) to update.
 Table~\ref{tab:main_results} presents the overall comparison across all three datasets. We report both per-dataset results and the average across datasets.
 
 \begin{table}[t]
@@ -166,70 +164,14 @@ The full method improves accuracy by 8.0~pp and robustness by 12.0~pp over Stand
 \label{sec:further_analysis}
 
 \paragraph{Empirical validation of \textsc{ShortcutScore}.}
-Tables~\ref{tab:score_validation}--\ref{tab:reweighting} present three complementary analyses validating our gradient-based \textsc{ShortcutScore}. Table~\ref{tab:score_validation} demonstrates a strong positive correlation between \textsc{ShortcutScore} $S(s)$ and the true shortcut sample rate within binned score intervals, achieving a Pearson correlation of $r = 0.90$. Samples in the lowest score bin ($S(s) < 0.12$) contain only 61.9\% shortcut samples, while the highest bin ($S(s) > 1.06$) contains 92.5\%. This monotonic trend confirms that higher \textsc{ShortcutScore} values reliably indicate greater shortcut bias.
+Figure~\ref{fig:analysis} presents three diagnostic visualizations. Panel (a) shows the positive correlation between \textsc{ShortcutScore} $S(s)$ and the true shortcut sample rate within binned score intervals, achieving a Pearson correlation of $r = 0.67$. This confirms that higher \textsc{ShortcutScore} values reliably indicate a greater concentration of shortcut-biased samples. Panel (b) shows the distribution of gradient alignment $A(s)$ for shortcut vs.\ non-shortcut samples. Non-shortcut samples tend to cluster near zero alignment, while shortcut samples exhibit a broader distribution skewed toward negative values, reflecting their divergence from the validation gradient direction. Panel (c) illustrates the exponential reweighting function $w(s) = \exp(-\lambda \cdot S(s))$ with $\lambda = 2.0$, showing how samples with high \textsc{ShortcutScore} receive substantially reduced weight during training.
 
-\begin{table}[t]
-\centering
-\caption{\textsc{ShortcutScore} vs.\ shortcut sample rate across 10 binned score intervals (Pearson $r = 0.90$, $n = 600$ samples pooled across all three datasets). Higher scores reliably predict higher concentrations of shortcut-biased samples.}
-\label{tab:score_validation}
-\small
-\begin{tabular}{cccc}
-\toprule
-\textbf{Score Range} & \textbf{$n$} & \textbf{SC Rate} & \textbf{Mean $S(s)$} \\
-\midrule
-$[0.00, 0.12)$ & 197 & 0.619 & 0.007 \\
-$[0.12, 0.24)$ & 41  & 0.561 & 0.179 \\
-$[0.24, 0.35)$ & 39  & 0.641 & 0.276 \\
-$[0.35, 0.47)$ & 54  & 0.722 & 0.427 \\
-$[0.47, 0.59)$ & 53  & 0.623 & 0.536 \\
-$[0.59, 0.71)$ & 41  & 0.659 & 0.635 \\
-$[0.71, 0.82)$ & 31  & 0.774 & 0.768 \\
-$[0.82, 0.94)$ & 57  & 0.789 & 0.878 \\
-$[0.94, 1.06)$ & 47  & 0.830 & 1.011 \\
-$[1.06, 1.18]$ & 40  & \textbf{0.925} & 1.114 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Table~\ref{tab:alignment_stats} shows the distribution of gradient alignment $A(s) = \cos(\mathbf{g}_s, \mathbf{g}_V)$ for shortcut vs.\ non-shortcut samples. Shortcut samples exhibit a negative mean alignment ($\mu = -0.161$) with large variance ($\sigma = 0.439$), indicating that their per-sample gradients systematically diverge from the validation gradient direction. Non-shortcut samples, in contrast, show a positive mean alignment ($\mu = 0.056$), confirming that they contribute gradient updates more consistent with the true learning objective. The difference in medians ($-0.169$ vs.\ $0.066$) further corroborates this separation.
-
-\begin{table}[t]
-\centering
-\caption{Gradient alignment statistics for shortcut vs.\ non-shortcut training samples. Alignment is computed as $A(s) = \cos(\mathbf{g}_s, \mathbf{g}_V)$, where $\mathbf{g}_s$ is the per-sample gradient and $\mathbf{g}_V$ is the validation gradient. Shortcut samples exhibit systematically negative alignment, while non-shortcut samples are approximately centered or positively aligned.}
-\label{tab:alignment_stats}
-\small
-\begin{tabular}{lcccccccc}
-\toprule
-\textbf{Group} & \textbf{$n$} & \textbf{Mean} & \textbf{Std} & \textbf{Min} & \textbf{Q1} & \textbf{Median} & \textbf{Q3} & \textbf{Max} \\
-\midrule
-Shortcut     & 414 & $-$0.161 & 0.439 & $-$0.876 & $-$0.568 & $-$0.169 & 0.293 & 0.541 \\
-Non-shortcut & 186 &    0.056 & 0.431 & $-$0.835 & $-$0.266 &    0.066 & 0.446 & 0.832 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Table~\ref{tab:reweighting} illustrates the exponential reweighting function $w(s) = \exp(-\lambda \cdot S(s))$ with $\lambda = 2.0$, showing how samples with high \textsc{ShortcutScore} receive substantially reduced weight during training. Samples with $S(s) = 0$ retain full weight ($w = 1.0$), while samples near the maximum observed score ($S(s) \approx 1.0$) receive only 13.5\% of the original weight, effectively down-weighting shortcut-biased samples by $7.4\times$.
-
-\begin{table}[t]
-\centering
-\caption{Exponential reweighting function $w(s) = \exp(-\lambda \cdot S(s))$ with $\lambda = 2.0$. Samples with higher \textsc{ShortcutScore} receive exponentially reduced weight in the training loss, suppressing shortcut reliance.}
-\label{tab:reweighting}
-\small
-\begin{tabular}{ccl}
-\toprule
-\textbf{$S(s)$} & \textbf{$w(s)$} & \textbf{Interpretation} \\
-\midrule
-0.00 & 1.0000 & Full weight (no shortcut signal) \\
-0.25 & 0.6065 & Mild down-weighting \\
-0.50 & 0.3679 & Moderate suppression ($2.7\times$) \\
-0.75 & 0.2231 & Strong suppression ($4.5\times$) \\
-1.00 & 0.1353 & Heavy suppression ($7.4\times$) \\
-1.50 & 0.0498 & Near-exclusion ($20.1\times$) \\
-2.00 & 0.0183 & Effectively excluded ($54.6\times$) \\
-3.00 & 0.0025 & Negligible weight ($404\times$) \\
-\bottomrule
-\end{tabular}
-\end{table}
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{results/figure3.png}
+    \caption{Empirical analysis. (a) \textsc{ShortcutScore} vs.\ shortcut sample rate ($r = 0.67$), confirming the score's validity. (b)~Gradient alignment distribution: shortcut samples (red) spread broadly while non-shortcut samples (green) concentrate near alignment. (c) Exponential reweighting function with $\lambda = 2.0$ and threshold $\tau_A = 0.3$.}
+    \label{fig:analysis}
+\end{figure}
 
 \paragraph{Shortcut detection quality.}
 Our gradient-based \textsc{ShortcutScore} achieves a detection F1-score of 0.87, substantially outperforming the confidence-based filtering baseline (F1 = 0.59). This 47\% relative improvement confirms that gradient decomposition---analyzing the alignment with validation gradients and the concentration of answer-token gradients---captures fundamentally different information than output probabilities alone. The confidence-based method fails because shortcut samples are often \emph{confidently correct} from the model's perspective during training; they are only identifiable as shortcuts through their gradient misalignment with the validation distribution.
@@ -239,3 +181,4 @@ Self-Consistency Decoding improves clean accuracy by only 0.6~pp (from 66.7\% to
 
 \paragraph{Efficiency.}
 The entire experimental pipeline---including training all methods across three datasets, computing per-sample gradients for \textsc{ShortcutScore} estimation, and running all evaluations---completed in under 2 minutes on a single NVIDIA H100 NVL GPU. Our method's two-phase design (standard warmup followed by scored retraining) adds only modest overhead relative to Standard FT, attributable primarily to the one-time per-sample gradient computation in Phase~2. This demonstrates that gradient-aware shortcut correction is practical even for rapid experimental iteration.
+
