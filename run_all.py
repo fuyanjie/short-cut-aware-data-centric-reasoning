@@ -48,7 +48,7 @@ def main():
         print(f'GPUs: {n_gpus}')
         for i in range(n_gpus):
             print(f'  GPU {i}: {torch.cuda.get_device_name(i)} '
-                  f'({torch.cuda.get_device_properties(i).total_mem / 1e9:.1f} GB)')
+                  f'({torch.cuda.get_device_properties(i).total_memory / 1e9:.1f} GB)')
     print(f'Seed: {C.seed}')
     print(f'Model: d={C.d_model}, layers={C.num_layers}, heads={C.nhead}, ff={C.d_ff}')
     print(f'Data: train={C.n_train}, val={C.n_val}, test={C.n_test}')
