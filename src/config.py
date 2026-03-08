@@ -62,6 +62,11 @@ class Config:
         df_warmup_epochs = 5
         df_confidence_threshold = 0.90
 
+        jtt_warmup_epochs = 5
+        jtt_upweight_factor = 3
+        focal_gamma = 2.0
+        gdro_eta = 0.01
+
     else:
         vocab_size = 35
         d_model = 128
@@ -88,6 +93,11 @@ class Config:
         df_warmup_epochs = 3
         df_confidence_threshold = 0.90
 
+        jtt_warmup_epochs = 5
+        jtt_upweight_factor = 3
+        focal_gamma = 2.0
+        gdro_eta = 0.01
+
     # ================================================================
     # Real-world dataset config (GSM8K / MATH)
     # ================================================================
@@ -113,6 +123,11 @@ class Config:
 
         df_warmup_epochs = 3
         df_confidence_threshold = 0.90
+
+        jtt_warmup_epochs = 5
+        jtt_upweight_factor = 3
+        focal_gamma = 2.0
+        gdro_eta = 0.01
 
         # Special token strings (resolved to IDs at runtime by tokenizer)
         question_sep = "\n\nSolution:\n"   # separates question from reasoning

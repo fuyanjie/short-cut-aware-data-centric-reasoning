@@ -290,7 +290,7 @@ def generate_math_dataset_realworld(tokenizer, seed=42):
     from datasets import load_dataset
     rng = random.Random(seed)
 
-    ds = load_dataset("lighteval/MATH", "all")
+    ds = load_dataset("DigitalLearningGmbH/MATH-lighteval", "all")
     train_data = list(ds['train'])
     test_data = list(ds['test'])
 

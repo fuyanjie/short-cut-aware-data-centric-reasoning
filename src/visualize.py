@@ -28,11 +28,15 @@ def generate_table1(all_results, datasets):
     Rows: methods. Columns: Accuracy, Robustness, Reasoning Consistency, Shortcut F1.
     Values are averaged across datasets.
     """
-    methods = ['standard_ft', 'self_consistency', 'data_filtering', 'full_method']
+    methods = ['standard_ft', 'self_consistency', 'data_filtering',
+               'jtt', 'focal_loss', 'group_dro', 'full_method']
     method_names = {
         'standard_ft': 'Standard Fine-Tuning',
         'self_consistency': 'Self-Consistency Decoding',
         'data_filtering': 'Data Filtering',
+        'jtt': 'JTT (Just Train Twice)',
+        'focal_loss': 'Focal Loss',
+        'group_dro': 'Group DRO',
         'full_method': 'Our Method (Full)',
     }
 
@@ -315,8 +319,10 @@ def generate_training_curves(training_logs, save_name='training_curves.png'):
 
 def generate_summary_bar_chart(all_results, datasets):
     """Bar chart comparing methods across accuracy and robustness."""
-    methods = ['standard_ft', 'self_consistency', 'data_filtering', 'full_method']
-    method_labels = ['Standard FT', 'Self-Consistency', 'Data Filtering', 'Our Method']
+    methods = ['standard_ft', 'self_consistency', 'data_filtering',
+               'jtt', 'focal_loss', 'group_dro', 'full_method']
+    method_labels = ['Standard FT', 'Self-Consistency', 'Data Filtering',
+                     'JTT', 'Focal Loss', 'Group DRO', 'Our Method']
 
     avg_clean = []
     avg_perturbed = []

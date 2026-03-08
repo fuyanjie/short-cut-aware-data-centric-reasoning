@@ -131,6 +131,199 @@ def train_data_filtering(model, dataset, epochs=None, device=C.device, verbose=T
     return train_standard(model, filtered_dataset, epochs=epochs, device=device, verbose=verbose, cfg=cfg)
 
 
+def train_focal_loss(model, dataset, epochs=None, device=C.device, verbose=True, cfg=None):
+    """Focal Loss baseline.
+
+    Same loop as train_standard but replaces CE with focal loss:
+      FL(p_t) = (1 - p_t)^gamma * CE(p_t)
+    """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    lr = _c.get('lr', C.lr)
+    wd = _c.get('weight_decay', C.weight_decay)
+    gamma = _c.get('focal_gamma', C.focal_gamma)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    train_loader = get_dataloader(dataset['train'], batch_size=bs, shuffle=True)
+    total_steps = epochs * len(train_loader)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
+
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0.0
+        n_batches = 0
+        for batch in train_loader:
+            input_ids = batch['input_ids'].to(device)
+            target_ids = batch['target_ids'].to(device)
+            loss_mask = batch['loss_mask'].to(device)
+
+            optimizer.zero_grad()
+            logits = model(input_ids)
+
+            B, T, V = logits.shape
+            ce_per_token = F.cross_entropy(
+                logits.reshape(-1, V), target_ids.reshape(-1), reduction='none'
+            ).reshape(B, T)
+
+            # Focal modulation: (1 - p_t)^gamma
+            with torch.no_grad():
+                probs = F.softmax(logits, dim=-1)
+                p_t = probs.gather(2, target_ids.unsqueeze(-1)).squeeze(-1)
+            focal_weight = (1.0 - p_t) ** gamma
+
+            focal_loss = focal_weight * ce_per_token * loss_mask
+            loss = focal_loss.sum() / loss_mask.sum().clamp(min=1)
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            scheduler.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+
+        if verbose and (epoch + 1) % max(1, epochs // 5) == 0:
+            print(f"  Epoch {epoch+1}/{epochs}, Loss: {total_loss/n_batches:.4f}")
+
+    return model
+
+
+def train_jtt(model, dataset, epochs=None, device=C.device, verbose=True, cfg=None):
+    """JTT (Just Train Twice) baseline.
+
+    Phase 1: Warmup training on a copy of the model.
+    Phase 2: Identify misclassified samples (answer token mismatch).
+    Phase 3: Upsample those samples.
+    Phase 4: Retrain original model on upsampled dataset.
+    """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    warmup_epochs = _c.get('jtt_warmup_epochs', C.jtt_warmup_epochs)
+    upweight = _c.get('jtt_upweight_factor', C.jtt_upweight_factor)
+
+    # Phase 1: Warmup on a copy
+    if verbose:
+        print(f"  JTT Phase 1: Warmup ({warmup_epochs} epochs)")
+    warmup_model = copy.deepcopy(model)
+    train_standard(warmup_model, dataset, epochs=warmup_epochs, device=device, verbose=False, cfg=cfg)
+
+    # Phase 2: Identify misclassified samples
+    warmup_model.eval()
+    eval_loader = get_dataloader(dataset['train'], shuffle=False, batch_size=bs)
+    error_flags = []
+    with torch.no_grad():
+        for batch in eval_loader:
+            input_ids = batch['input_ids'].to(device)
+            target_ids = batch['target_ids'].to(device)
+            answer_mask = batch['answer_mask'].to(device)
+
+            logits = warmup_model(input_ids)
+            preds = logits.argmax(dim=-1)  # (B, T)
+
+            for i in range(input_ids.size(0)):
+                am = answer_mask[i].bool()
+                if am.any():
+                    is_error = (preds[i][am] != target_ids[i][am]).any().item()
+                else:
+                    is_error = False
+                error_flags.append(is_error)
+
+    del warmup_model
+    n_errors = sum(error_flags)
+    if verbose:
+        print(f"  JTT Phase 2: {n_errors}/{len(error_flags)} error samples identified")
+
+    # Phase 3: Upsample error samples
+    original_samples = dataset['train'].samples
+    upsampled = []
+    for i, sample in enumerate(original_samples):
+        upsampled.append(sample)
+        if i < len(error_flags) and error_flags[i]:
+            for _ in range(upweight - 1):
+                upsampled.append(sample)
+
+    if verbose:
+        print(f"  JTT Phase 3: Upsampled {len(original_samples)} -> {len(upsampled)} samples")
+
+    from src.data import ReasoningDataset
+    pad_id = getattr(dataset['train'], 'pad_id', C.PAD)
+    upsampled_dataset = {**dataset, 'train': ReasoningDataset(upsampled, pad_id=pad_id)}
+
+    # Phase 4: Retrain
+    if verbose:
+        print(f"  JTT Phase 4: Retraining ({epochs} epochs)")
+    return train_standard(model, upsampled_dataset, epochs=epochs, device=device, verbose=verbose, cfg=cfg)
+
+
+def train_group_dro(model, dataset, epochs=None, device=C.device, verbose=True, cfg=None):
+    """Group DRO baseline.
+
+    Uses is_shortcut as group label. Maintains group weights q that are
+    updated via exponentiated gradient to upweight the worst-performing group.
+    """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    lr = _c.get('lr', C.lr)
+    wd = _c.get('weight_decay', C.weight_decay)
+    eta = _c.get('gdro_eta', C.gdro_eta)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    train_loader = get_dataloader(dataset['train'], batch_size=bs, shuffle=True)
+    total_steps = epochs * len(train_loader)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
+
+    # Group weights: [non-shortcut, shortcut]
+    q = torch.tensor([0.5, 0.5], device=device)
+
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0.0
+        n_batches = 0
+        for batch in train_loader:
+            input_ids = batch['input_ids'].to(device)
+            target_ids = batch['target_ids'].to(device)
+            loss_mask = batch['loss_mask'].to(device)
+            is_shortcut = batch['is_shortcut'].to(device)  # (B,)
+
+            optimizer.zero_grad()
+            logits = model(input_ids)
+
+            B, T, V = logits.shape
+            loss_per_token = F.cross_entropy(
+                logits.reshape(-1, V), target_ids.reshape(-1), reduction='none'
+            ).reshape(B, T)
+            per_sample_loss = (loss_per_token * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp(min=1)
+
+            # Compute per-group losses
+            group_losses = torch.zeros(2, device=device)
+            for g in range(2):
+                mask_g = (is_shortcut == g).float()
+                if mask_g.sum() > 0:
+                    group_losses[g] = (per_sample_loss * mask_g).sum() / mask_g.sum()
+
+            # Update group weights
+            q = q * torch.exp(eta * group_losses.detach())
+            q = q / q.sum()
+
+            loss = (q * group_losses).sum()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            scheduler.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+
+        if verbose and (epoch + 1) % max(1, epochs // 5) == 0:
+            print(f"  Epoch {epoch+1}/{epochs}, Loss: {total_loss/n_batches:.4f}, "
+                  f"q=[{q[0]:.3f}, {q[1]:.3f}]")
+
+    return model
+
+
 def _compute_sample_scores(model, dataset, device=C.device, cfg=None):
     """Compute ShortcutScores for training samples (one-time).
 

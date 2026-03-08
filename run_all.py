@@ -25,7 +25,8 @@ from src.config import Config as C, PROFILE, DATASET_TYPE
 from src.data import (generate_math_dataset, generate_financial_dataset,
                       generate_causal_dataset, get_dataloader)
 from src.model import create_model, create_model_nl, count_parameters
-from src.trainer import train_standard, train_data_filtering, train_our_method
+from src.trainer import (train_standard, train_data_filtering, train_our_method,
+                         train_jtt, train_focal_loss, train_group_dro)
 from src.evaluate import (run_full_evaluation, run_full_evaluation_nl,
                           evaluate_gradient_alignment)
 from src.visualize import (generate_table1, generate_table2, generate_table3,
@@ -78,7 +79,7 @@ def run_synthetic_experiments(all_results, collected_data_all, dataset_names):
         print(f'\n--- Dataset: {ds_name} ---')
 
         # (a) Standard Fine-Tuning
-        print('\n[1/4] Training: Standard Fine-Tuning...')
+        print('\n[1/7] Training: Standard Fine-Tuning...')
         set_seed()
         model_ft = create_model()
         t0 = time.time()
@@ -92,14 +93,14 @@ def run_synthetic_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_ft["robustness"]:.3f}')
 
         # (b) Self-Consistency Decoding
-        print('\n[2/4] Evaluating: Self-Consistency Decoding...')
+        print('\n[2/7] Evaluating: Self-Consistency Decoding...')
         results_sc = run_full_evaluation(model_ft, ds, use_self_consistency=True)
         all_results[(ds_name, 'self_consistency')] = results_sc
         print(f'  Accuracy: {results_sc["accuracy_clean"]:.3f}, '
               f'Robustness: {results_sc["robustness"]:.3f}')
 
         # (c) Data Filtering
-        print('\n[3/4] Training: Data Filtering...')
+        print('\n[3/7] Training: Data Filtering...')
         set_seed()
         model_df = create_model()
         t0 = time.time()
@@ -113,8 +114,50 @@ def run_synthetic_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_df["robustness"]:.3f}, '
               f'F1: {results_df["shortcut_f1"]:.3f}')
 
-        # (d) Our Full Method
-        print('\n[4/4] Training: Our Method (Reweighting + Gradient Surgery)...')
+        # (d) JTT
+        print('\n[4/7] Training: JTT (Just Train Twice)...')
+        set_seed()
+        model_jtt = create_model()
+        t0 = time.time()
+        train_jtt(model_jtt, ds)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_jtt = run_full_evaluation(model_jtt, ds, compute_f1=False)
+        all_results[(ds_name, 'jtt')] = results_jtt
+        print(f'  Accuracy: {results_jtt["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_jtt["robustness"]:.3f}')
+
+        # (e) Focal Loss
+        print('\n[5/7] Training: Focal Loss...')
+        set_seed()
+        model_fl = create_model()
+        t0 = time.time()
+        train_focal_loss(model_fl, ds)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_fl = run_full_evaluation(model_fl, ds, compute_f1=False)
+        all_results[(ds_name, 'focal_loss')] = results_fl
+        print(f'  Accuracy: {results_fl["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_fl["robustness"]:.3f}')
+
+        # (f) Group DRO
+        print('\n[6/7] Training: Group DRO...')
+        set_seed()
+        model_gdro = create_model()
+        t0 = time.time()
+        train_group_dro(model_gdro, ds)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_gdro = run_full_evaluation(model_gdro, ds, compute_f1=False)
+        all_results[(ds_name, 'group_dro')] = results_gdro
+        print(f'  Accuracy: {results_gdro["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_gdro["robustness"]:.3f}')
+
+        # (g) Our Full Method
+        print('\n[7/7] Training: Our Method (Reweighting + Gradient Surgery)...')
         set_seed()
         model_ours = create_model()
         t0 = time.time()
@@ -135,7 +178,7 @@ def run_synthetic_experiments(all_results, collected_data_all, dataset_names):
               f'F1: {results_ours["shortcut_f1"]:.3f}, '
               f'Alignment: {results_ours["gradient_alignment"]:.3f}')
 
-        del model_ft, model_df, model_ours
+        del model_ft, model_df, model_jtt, model_fl, model_gdro, model_ours
         _empty_cache()
 
     # ===================================================================
@@ -245,7 +288,7 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
         print(f'\n--- Dataset: {ds_name} ---')
 
         # (a) Standard Fine-Tuning
-        print('\n[1/4] Training: Standard Fine-Tuning...')
+        print('\n[1/7] Training: Standard Fine-Tuning...')
         set_seed()
         model_ft = create_model_nl()
         t0 = time.time()
@@ -259,7 +302,7 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_ft["robustness"]:.3f}')
 
         # (b) Self-Consistency Decoding
-        print('\n[2/4] Evaluating: Self-Consistency Decoding...')
+        print('\n[2/7] Evaluating: Self-Consistency Decoding...')
         results_sc = run_full_evaluation_nl(model_ft, ds, tokenizer,
                                              use_self_consistency=True)
         all_results[(ds_name, 'self_consistency')] = results_sc
@@ -267,7 +310,7 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_sc["robustness"]:.3f}')
 
         # (c) Data Filtering
-        print('\n[3/4] Training: Data Filtering...')
+        print('\n[3/7] Training: Data Filtering...')
         set_seed()
         model_df = create_model_nl()
         t0 = time.time()
@@ -281,8 +324,50 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_df["robustness"]:.3f}, '
               f'F1: {results_df["shortcut_f1"]:.3f}')
 
-        # (d) Our Full Method
-        print('\n[4/4] Training: Our Method (Reweighting + Gradient Surgery)...')
+        # (d) JTT
+        print('\n[4/7] Training: JTT (Just Train Twice)...')
+        set_seed()
+        model_jtt = create_model_nl()
+        t0 = time.time()
+        train_jtt(model_jtt, ds, cfg=nl_cfg)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_jtt = run_full_evaluation_nl(model_jtt, ds, tokenizer, compute_f1=False)
+        all_results[(ds_name, 'jtt')] = results_jtt
+        print(f'  Accuracy: {results_jtt["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_jtt["robustness"]:.3f}')
+
+        # (e) Focal Loss
+        print('\n[5/7] Training: Focal Loss...')
+        set_seed()
+        model_fl = create_model_nl()
+        t0 = time.time()
+        train_focal_loss(model_fl, ds, cfg=nl_cfg)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_fl = run_full_evaluation_nl(model_fl, ds, tokenizer, compute_f1=False)
+        all_results[(ds_name, 'focal_loss')] = results_fl
+        print(f'  Accuracy: {results_fl["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_fl["robustness"]:.3f}')
+
+        # (f) Group DRO
+        print('\n[6/7] Training: Group DRO...')
+        set_seed()
+        model_gdro = create_model_nl()
+        t0 = time.time()
+        train_group_dro(model_gdro, ds, cfg=nl_cfg)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_gdro = run_full_evaluation_nl(model_gdro, ds, tokenizer, compute_f1=False)
+        all_results[(ds_name, 'group_dro')] = results_gdro
+        print(f'  Accuracy: {results_gdro["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_gdro["robustness"]:.3f}')
+
+        # (g) Our Full Method
+        print('\n[7/7] Training: Our Method (Reweighting + Gradient Surgery)...')
         set_seed()
         model_ours = create_model_nl()
         t0 = time.time()
@@ -303,7 +388,7 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
               f'F1: {results_ours["shortcut_f1"]:.3f}, '
               f'Alignment: {results_ours["gradient_alignment"]:.3f}')
 
-        del model_ft, model_df, model_ours
+        del model_ft, model_df, model_jtt, model_fl, model_gdro, model_ours
         _empty_cache()
 
     # ===================================================================
