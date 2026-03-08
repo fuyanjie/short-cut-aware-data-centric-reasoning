@@ -290,9 +290,16 @@ def generate_math_dataset_realworld(tokenizer, seed=42):
     from datasets import load_dataset
     rng = random.Random(seed)
 
-    ds = load_dataset("DigitalLearningGmbH/MATH-lighteval", "all")
-    train_data = list(ds['train'])
-    test_data = list(ds['test'])
+    from datasets import concatenate_datasets
+    _subsets = ['algebra', 'counting_and_probability', 'geometry',
+                'intermediate_algebra', 'number_theory', 'prealgebra', 'precalculus']
+    _train_parts, _test_parts = [], []
+    for _sub in _subsets:
+        _ds = load_dataset("DigitalLearningGmbH/MATH-lighteval", _sub)
+        _train_parts.append(_ds['train'])
+        _test_parts.append(_ds['test'])
+    train_data = list(concatenate_datasets(_train_parts))
+    test_data = list(concatenate_datasets(_test_parts))
 
     # Parse answers and filter to numeric-only
     for item in train_data + test_data:
