@@ -1,4 +1,5 @@
 """Evaluation metrics and result generation."""
+import re
 import torch
 import numpy as np
 from collections import Counter
@@ -339,6 +340,133 @@ def run_full_evaluation(model, dataset, device=C.device, use_self_consistency=Fa
         results['gradient_alignment'] = evaluate_gradient_alignment(
             model, dataset['train'], val_loader, device
         )
+    else:
+        results['gradient_alignment'] = None
+
+    return results
+
+
+# ============================================================================
+# NL (Real-World) Evaluation
+# ============================================================================
+
+def parse_numeric_answer(text):
+    """Parse a numeric answer from generated text (GSM8K #### or MATH \\boxed{})."""
+    match = re.search(r'####\s*(-?[\d,]+\.?\d*)', text)
+    if match:
+        try:
+            return float(match.group(1).replace(',', ''))
+        except ValueError:
+            pass
+    match = re.search(r'\\boxed\{([^}]+)\}', text)
+    if match:
+        try:
+            return float(match.group(1).replace(',', '').strip())
+        except ValueError:
+            pass
+    nums = re.findall(r'-?\d+(?:\.\d+)?', text)
+    if nums:
+        try:
+            return float(nums[-1])
+        except ValueError:
+            pass
+    return None
+
+
+def self_consistency_predict_nl(model, prefix, tokenizer, max_new_tokens=128,
+                                 num_samples=C.sc_num_samples, temperature=C.sc_temperature,
+                                 device=C.device):
+    """Self-consistency decoding for NL models: sample multiple, majority vote."""
+    model.eval()
+    eos_id = tokenizer.eos_token_id
+    answers = []
+
+    for _ in range(num_samples):
+        generated = model.generate(prefix, max_new_tokens=max_new_tokens,
+                                    temperature=temperature, greedy=False, eos_id=eos_id)
+        gen_tokens = generated[0][prefix.size(1):].cpu().tolist()
+        gen_text = tokenizer.decode(gen_tokens)
+        answer = parse_numeric_answer(gen_text)
+        if answer is not None:
+            answers.append(int(answer))
+
+    if not answers:
+        return None
+    counter = Counter(answers)
+    return float(counter.most_common(1)[0][0])
+
+
+def evaluate_accuracy_nl(model, dataset, tokenizer, device=C.device,
+                          max_gen=128, use_self_consistency=False):
+    """Evaluate NL model accuracy via autoregressive generation and answer parsing."""
+    model.eval()
+    correct = 0
+    total = 0
+    eos_id = tokenizer.eos_token_id
+    loader = get_dataloader(dataset, batch_size=1, shuffle=False)
+
+    with torch.no_grad():
+        for batch in loader:
+            input_ids = batch['input_ids'][0]
+            target_ids = batch['target_ids'][0]
+            answer_mask = batch['answer_mask'][0]
+            prompt_len = int(batch['prompt_len'][0].item())
+
+            gt_tokens = [t.item() for t, m in zip(target_ids, answer_mask) if m > 0.5]
+            gt_text = tokenizer.decode(gt_tokens).strip()
+            gt_answer = parse_numeric_answer(gt_text)
+
+            prefix = input_ids[:prompt_len].unsqueeze(0).to(device)
+
+            if use_self_consistency:
+                pred_answer = self_consistency_predict_nl(
+                    model, prefix, tokenizer, max_gen, device=device)
+            else:
+                generated = model.generate(prefix, max_new_tokens=max_gen,
+                                            greedy=True, eos_id=eos_id)
+                gen_tokens = generated[0][prompt_len:].cpu().tolist()
+                gen_text = tokenizer.decode(gen_tokens)
+                pred_answer = parse_numeric_answer(gen_text)
+
+            if gt_answer is not None and pred_answer is not None:
+                if abs(gt_answer - pred_answer) < 0.01:
+                    correct += 1
+            total += 1
+
+    return correct / max(total, 1)
+
+
+def run_full_evaluation_nl(model, dataset, tokenizer, device=C.device,
+                            use_self_consistency=False,
+                            compute_f1=False, compute_alignment=False):
+    """Run full evaluation for NL (real-world) datasets."""
+    results = {}
+
+    acc_clean = evaluate_accuracy_nl(model, dataset['test_clean'], tokenizer, device,
+                                      use_self_consistency=use_self_consistency)
+    acc_perturbed = evaluate_accuracy_nl(model, dataset['test_perturbed'], tokenizer, device,
+                                          use_self_consistency=use_self_consistency)
+
+    results['accuracy_clean'] = acc_clean
+    results['accuracy_perturbed'] = acc_perturbed
+    results['robustness'] = acc_perturbed
+    results['reasoning_consistency'] = 0.0
+
+    if compute_f1:
+        val_loader = get_dataloader(dataset['val'], batch_size=C.NL.batch_size, shuffle=False)
+        from src.data import ReasoningDataset
+        n_sub = min(100, len(dataset['train']))
+        subset = ReasoningDataset(dataset['train'].samples[:n_sub],
+                                   pad_id=dataset['train'].pad_id)
+        results['shortcut_f1'] = evaluate_shortcut_detection(
+            model, subset, val_loader, device)
+    else:
+        results['shortcut_f1'] = None
+
+    if compute_alignment:
+        val_loader = get_dataloader(dataset['val'], batch_size=C.NL.batch_size, shuffle=False)
+        results['gradient_alignment'] = evaluate_gradient_alignment(
+            model, dataset['train'], val_loader, device)
     else:
         results['gradient_alignment'] = None
 

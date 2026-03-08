@@ -17,10 +17,19 @@ from src.methods import (
 )
 
 
-def train_standard(model, dataset, epochs=C.epochs, device=C.device, verbose=True):
-    """Standard supervised fine-tuning (Baseline a)."""
-    optimizer = torch.optim.AdamW(model.parameters(), lr=C.lr, weight_decay=C.weight_decay)
-    train_loader = get_dataloader(dataset['train'], shuffle=True)
+def train_standard(model, dataset, epochs=None, device=C.device, verbose=True, cfg=None):
+    """Standard supervised fine-tuning (Baseline a).
+
+    cfg: optional dict with batch_size, lr, weight_decay, epochs overrides.
+    """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    lr = _c.get('lr', C.lr)
+    wd = _c.get('weight_decay', C.weight_decay)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    train_loader = get_dataloader(dataset['train'], batch_size=bs, shuffle=True)
     total_steps = epochs * len(train_loader)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
 
@@ -50,19 +59,27 @@ def train_standard(model, dataset, epochs=C.epochs, device=C.device, verbose=Tru
     return model
 
 
-def train_data_filtering(model, dataset, epochs=C.epochs, device=C.device, verbose=True):
+def train_data_filtering(model, dataset, epochs=None, device=C.device, verbose=True, cfg=None):
     """Data Filtering baseline (Baseline c).
 
     Warm up for a few epochs, identify high-confidence samples as potential shortcuts,
     filter them out, then retrain.
     """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    lr = _c.get('lr', C.lr)
+    wd = _c.get('weight_decay', C.weight_decay)
+    df_warmup = _c.get('df_warmup_epochs', C.df_warmup_epochs)
+    df_thresh = _c.get('df_confidence_threshold', C.df_confidence_threshold)
+
     # Phase 1: Warmup training
     warmup_model = copy.deepcopy(model)
-    optimizer = torch.optim.AdamW(warmup_model.parameters(), lr=C.lr, weight_decay=C.weight_decay)
-    train_loader = get_dataloader(dataset['train'], shuffle=True, batch_size=C.batch_size)
+    optimizer = torch.optim.AdamW(warmup_model.parameters(), lr=lr, weight_decay=wd)
+    train_loader = get_dataloader(dataset['train'], shuffle=True, batch_size=bs)
 
     warmup_model.train()
-    for epoch in range(C.df_warmup_epochs):
+    for epoch in range(df_warmup):
         for batch in train_loader:
             input_ids = batch['input_ids'].to(device)
             target_ids = batch['target_ids'].to(device)
@@ -77,7 +94,7 @@ def train_data_filtering(model, dataset, epochs=C.epochs, device=C.device, verbo
     # Phase 2: Identify suspicious samples (high confidence = likely shortcut)
     warmup_model.eval()
     all_confs = []
-    eval_loader = get_dataloader(dataset['train'], shuffle=False, batch_size=C.batch_size)
+    eval_loader = get_dataloader(dataset['train'], shuffle=False, batch_size=bs)
     with torch.no_grad():
         for batch in eval_loader:
             input_ids = batch['input_ids'].to(device)
@@ -96,7 +113,7 @@ def train_data_filtering(model, dataset, epochs=C.epochs, device=C.device, verbo
                 all_confs.append(conf.item())
 
     # Keep low-confidence samples
-    keep_indices = [i for i, c in enumerate(all_confs) if c < C.df_confidence_threshold]
+    keep_indices = [i for i, c in enumerate(all_confs) if c < df_thresh]
 
     # Ensure at least 30% of samples are kept
     if len(keep_indices) < int(0.3 * len(dataset['train'])):
@@ -109,26 +126,30 @@ def train_data_filtering(model, dataset, epochs=C.epochs, device=C.device, verbo
         print(f"  Data Filtering: kept {len(filtered_samples)}/{len(dataset['train'])} samples")
 
     from src.data import ReasoningDataset
-    filtered_dataset = {**dataset, 'train': ReasoningDataset(filtered_samples)}
-    return train_standard(model, filtered_dataset, epochs=epochs, device=device, verbose=verbose)
+    pad_id = getattr(dataset['train'], 'pad_id', C.PAD)
+    filtered_dataset = {**dataset, 'train': ReasoningDataset(filtered_samples, pad_id=pad_id)}
+    return train_standard(model, filtered_dataset, epochs=epochs, device=device, verbose=verbose, cfg=cfg)
 
 
-def _compute_sample_scores(model, dataset, device=C.device,
-                            max_samples=C.score_max_samples):
+def _compute_sample_scores(model, dataset, device=C.device, cfg=None):
     """Compute ShortcutScores for training samples (one-time).
 
     Uses batched computation on server profile for efficiency.
 
     Returns list of scores, collected_data dict, and validation gradient g_V.
     """
-    val_loader = get_dataloader(dataset['val'], shuffle=False, batch_size=C.batch_size)
+    _c = cfg or {}
+    max_samples = _c.get('score_max_samples', C.score_max_samples)
+    score_bs = _c.get('score_batch_size', C.score_batch_size)
+    bs = _c.get('batch_size', C.batch_size)
+
+    val_loader = get_dataloader(dataset['val'], shuffle=False, batch_size=bs)
     g_V = compute_validation_gradient(model, val_loader, device)
 
     scores_all = []
     collected_data = {'scores': [], 'is_shortcut': [], 'alignments': [], 'concentrations': []}
 
     n_to_score = min(max_samples, len(dataset['train']))
-    score_bs = C.score_batch_size
 
     model.train()
 
@@ -192,7 +213,7 @@ def _compute_sample_scores(model, dataset, device=C.device,
 
 
 def train_our_method(model, dataset, use_reweighting=True, use_gradient_surgery=True,
-                     epochs=C.epochs, device=C.device, verbose=True, collect_scores=False):
+                     epochs=None, device=C.device, verbose=True, collect_scores=False, cfg=None):
     """Our method: Shortcut-aware Reweighting + Gradient Surgery.
 
     Stable two-phase approach:
@@ -200,18 +221,24 @@ def train_our_method(model, dataset, use_reweighting=True, use_gradient_surgery=
       Phase 2: Compute ShortcutScores (one-time per-sample gradients)
       Phase 3: Weighted retraining with batch-level gradient surgery
     """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    lr = _c.get('lr', C.lr)
+    wd = _c.get('weight_decay', C.weight_decay)
+
     warmup_epochs = max(5, epochs // 6)
     main_epochs = epochs - warmup_epochs
 
     # Phase 1: Warmup
     if verbose:
         print(f"  Phase 1: Warmup ({warmup_epochs} epochs)")
-    train_standard(model, dataset, epochs=warmup_epochs, device=device, verbose=False)
+    train_standard(model, dataset, epochs=warmup_epochs, device=device, verbose=False, cfg=cfg)
 
     # Phase 2: Compute ShortcutScores
     if verbose:
         print(f"  Phase 2: Computing ShortcutScores...")
-    sample_scores, collected_data, g_V = _compute_sample_scores(model, dataset, device)
+    sample_scores, collected_data, g_V = _compute_sample_scores(model, dataset, device, cfg=cfg)
 
     # Compute per-sample weights
     sample_weights = []
@@ -220,7 +247,7 @@ def train_our_method(model, dataset, use_reweighting=True, use_gradient_surgery=
         sample_weights.append(w)
 
     if verbose:
-        n_scored = min(C.score_max_samples, len(sample_scores))
+        n_scored = min(_c.get('score_max_samples', C.score_max_samples), len(sample_scores))
         avg_s = sum(sample_scores[:n_scored]) / n_scored
         avg_w = sum(sample_weights) / len(sample_weights)
         print(f"    Scored {n_scored}/{len(dataset['train'])} samples")
@@ -238,15 +265,16 @@ def train_our_method(model, dataset, use_reweighting=True, use_gradient_surgery=
         weighted_samples.append(ws)
 
     from src.data import ReasoningDataset
-    weighted_ds = ReasoningDataset(weighted_samples)
-    train_loader = get_dataloader(weighted_ds, shuffle=True)
+    pad_id = getattr(dataset['train'], 'pad_id', C.PAD)
+    weighted_ds = ReasoningDataset(weighted_samples, pad_id=pad_id)
+    train_loader = get_dataloader(weighted_ds, batch_size=bs, shuffle=True)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=C.lr * 0.5, weight_decay=C.weight_decay)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr * 0.5, weight_decay=wd)
     total_steps = main_epochs * len(train_loader)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=total_steps, eta_min=1e-5)
 
-    val_loader = get_dataloader(dataset['val'], shuffle=False, batch_size=C.batch_size)
+    val_loader = get_dataloader(dataset['val'], shuffle=False, batch_size=bs)
 
     model.train()
     for epoch in range(main_epochs):
@@ -314,7 +342,7 @@ def train_our_method(model, dataset, use_reweighting=True, use_gradient_surgery=
 
 def self_consistency_predict(model, input_ids, eq_position, max_new_tokens=8,
                               num_samples=C.sc_num_samples, temperature=C.sc_temperature,
-                              device=C.device):
+                              device=C.device, sep_id=C.SEP, eos_id=C.EOS):
     """Self-Consistency Decoding: sample multiple outputs, take majority vote.
 
     Returns:
@@ -326,14 +354,14 @@ def self_consistency_predict(model, input_ids, eq_position, max_new_tokens=8,
 
     for _ in range(num_samples):
         generated = model.generate(prefix, max_new_tokens=max_new_tokens,
-                                    temperature=temperature, greedy=False)
+                                    temperature=temperature, greedy=False, eos_id=eos_id)
         # Extract answer tokens (after SEP)
         gen_tokens = generated[0].tolist()
-        if C.SEP in gen_tokens:
-            sep_idx = gen_tokens.index(C.SEP)
+        if sep_id in gen_tokens:
+            sep_idx = gen_tokens.index(sep_id)
             ans = gen_tokens[sep_idx + 1:]
-            if C.EOS in ans:
-                ans = ans[:ans.index(C.EOS)]
+            if eos_id in ans:
+                ans = ans[:ans.index(eos_id)]
             answers.append(tuple(ans))
         else:
             answers.append(tuple(gen_tokens[eq_position + 1:]))

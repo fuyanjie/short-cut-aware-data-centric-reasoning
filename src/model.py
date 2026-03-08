@@ -13,10 +13,10 @@ class SmallGPT(nn.Module):
 
     def __init__(self, vocab_size=C.vocab_size, d_model=C.d_model, nhead=C.nhead,
                  num_layers=C.num_layers, d_ff=C.d_ff, max_seq_len=C.max_seq_len,
-                 dropout=C.dropout):
+                 dropout=C.dropout, padding_idx=C.PAD):
         super().__init__()
         self.d_model = d_model
-        self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=C.PAD)
+        self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=padding_idx)
         self.pos_embedding = nn.Embedding(max_seq_len, d_model)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_ff,
@@ -55,7 +55,7 @@ class SmallGPT(nn.Module):
         return logits
 
     @torch.no_grad()
-    def generate(self, prefix, max_new_tokens=10, temperature=1.0, greedy=True):
+    def generate(self, prefix, max_new_tokens=10, temperature=1.0, greedy=True, eos_id=C.EOS):
         """Autoregressive generation from a prefix.
 
         Args:
@@ -79,7 +79,7 @@ class SmallGPT(nn.Module):
                 probs = torch.softmax(next_logits, dim=-1)
                 next_token = torch.multinomial(probs, 1)
             seq = torch.cat([seq, next_token], dim=1)
-            if next_token.item() == C.EOS:
+            if next_token.item() == eos_id:
                 break
         return seq
 
@@ -99,6 +99,21 @@ def unwrap_model(model):
     """Get the underlying model from DataParallel wrapper, if any."""
     if isinstance(model, nn.DataParallel):
         return model.module
+    return model
+
+
+def create_model_nl(device=C.device):
+    """Create model with NL (real-world dataset) configuration."""
+    model = SmallGPT(
+        vocab_size=C.NL.vocab_size,
+        d_model=C.NL.d_model,
+        nhead=C.NL.nhead,
+        num_layers=C.NL.num_layers,
+        d_ff=C.NL.d_ff,
+        max_seq_len=C.NL.max_seq_len,
+        dropout=C.NL.dropout,
+        padding_idx=None,
+    ).to(device)
     return model
 
 

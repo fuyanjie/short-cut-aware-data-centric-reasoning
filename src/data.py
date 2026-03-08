@@ -17,8 +17,9 @@ from src.config import Config as C
 
 
 class ReasoningDataset(Dataset):
-    def __init__(self, samples):
+    def __init__(self, samples, pad_id=C.PAD):
         self.samples = samples
+        self.pad_id = pad_id
 
     def __len__(self):
         return len(self.samples)
@@ -29,26 +30,33 @@ class ReasoningDataset(Dataset):
                 for k, v in s.items()}
 
 
-def pad_collate(batch):
-    max_len = max(b['input_ids'].size(0) for b in batch)
-    result = {}
-    for key in batch[0]:
-        if key in ('is_shortcut', 'weight'):
-            result[key] = torch.stack([b[key] for b in batch])
-        else:
-            padded = []
-            for b in batch:
-                pad_len = max_len - b[key].size(0)
-                pad_val = C.PAD if 'ids' in key else 0.0
-                padded.append(torch.cat([b[key], torch.full((pad_len,), pad_val,
-                                         dtype=b[key].dtype)]))
-            result[key] = torch.stack(padded)
-    return result
+def _make_collate(pad_id):
+    """Create a collate function with the given pad token id."""
+    def collate(batch):
+        max_len = max(b['input_ids'].size(0) for b in batch)
+        result = {}
+        for key in batch[0]:
+            if key in ('is_shortcut', 'weight', 'prompt_len'):
+                result[key] = torch.stack([b[key] for b in batch])
+            else:
+                padded = []
+                for b in batch:
+                    pad_len = max_len - b[key].size(0)
+                    pad_val = pad_id if 'ids' in key else 0.0
+                    padded.append(torch.cat([b[key], torch.full((pad_len,), pad_val,
+                                             dtype=b[key].dtype)]))
+                result[key] = torch.stack(padded)
+        return result
+    return collate
+
+
+pad_collate = _make_collate(C.PAD)
 
 
 def get_dataloader(dataset, batch_size=C.batch_size, shuffle=True):
+    pad_id = getattr(dataset, 'pad_id', C.PAD)
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
-                      collate_fn=pad_collate, drop_last=False)
+                      collate_fn=_make_collate(pad_id), drop_last=False)
 
 
 def _d(n):
