@@ -324,6 +324,506 @@ def train_group_dro(model, dataset, epochs=None, device=C.device, verbose=True, 
     return model
 
 
+def train_irm(model, dataset, epochs=None, device=C.device, verbose=True, cfg=None):
+    """IRM (Invariant Risk Minimization) baseline (Arjovsky et al., 2019).
+
+    Adds IRMv1 penalty per group to encourage invariant representations.
+    """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    lr = _c.get('lr', C.lr)
+    wd = _c.get('weight_decay', C.weight_decay)
+    irm_lambda = _c.get('irm_lambda', C.irm_lambda)
+    anneal_epochs = _c.get('irm_anneal_epochs', C.irm_anneal_epochs)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    train_loader = get_dataloader(dataset['train'], batch_size=bs, shuffle=True)
+    total_steps = epochs * len(train_loader)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
+
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0.0
+        n_batches = 0
+        penalty_weight = irm_lambda if epoch >= anneal_epochs else 0.0
+
+        for batch in train_loader:
+            input_ids = batch['input_ids'].to(device)
+            target_ids = batch['target_ids'].to(device)
+            loss_mask = batch['loss_mask'].to(device)
+            is_shortcut = batch['is_shortcut'].to(device)
+
+            optimizer.zero_grad()
+            logits = model(input_ids)
+
+            B, T, V = logits.shape
+            loss_per_token = F.cross_entropy(
+                logits.reshape(-1, V), target_ids.reshape(-1), reduction='none'
+            ).reshape(B, T)
+            per_sample_loss = (loss_per_token * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp(min=1)
+
+            # Per-group losses and IRMv1 penalty
+            group_losses = []
+            penalties = []
+            for g in range(2):
+                mask_g = (is_shortcut == g)
+                if mask_g.sum() > 0:
+                    loss_g = per_sample_loss[mask_g].mean()
+                    group_losses.append(loss_g)
+                    # IRMv1: gradient penalty w.r.t. scalar w=1.0
+                    dummy_w = torch.tensor(1.0, device=device, requires_grad=True)
+                    scaled_loss = (per_sample_loss[mask_g] * dummy_w).mean()
+                    grad_w = torch.autograd.grad(scaled_loss, dummy_w, create_graph=True)[0]
+                    penalties.append(grad_w ** 2)
+
+            erm_loss = sum(group_losses) / max(len(group_losses), 1)
+            penalty = sum(penalties) / max(len(penalties), 1) if penalties else torch.tensor(0.0, device=device)
+            loss = erm_loss + penalty_weight * penalty
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            scheduler.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+
+        if verbose and (epoch + 1) % max(1, epochs // 5) == 0:
+            print(f"  Epoch {epoch+1}/{epochs}, Loss: {total_loss/n_batches:.4f}")
+
+    return model
+
+
+def train_vrex(model, dataset, epochs=None, device=C.device, verbose=True, cfg=None):
+    """V-REx (Variance Risk Extrapolation) baseline (Krueger et al., 2021).
+
+    Penalizes variance of per-group risks.
+    """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    lr = _c.get('lr', C.lr)
+    wd = _c.get('weight_decay', C.weight_decay)
+    vrex_beta = _c.get('vrex_beta', C.vrex_beta)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    train_loader = get_dataloader(dataset['train'], batch_size=bs, shuffle=True)
+    total_steps = epochs * len(train_loader)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
+
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0.0
+        n_batches = 0
+        for batch in train_loader:
+            input_ids = batch['input_ids'].to(device)
+            target_ids = batch['target_ids'].to(device)
+            loss_mask = batch['loss_mask'].to(device)
+            is_shortcut = batch['is_shortcut'].to(device)
+
+            optimizer.zero_grad()
+            logits = model(input_ids)
+
+            B, T, V = logits.shape
+            loss_per_token = F.cross_entropy(
+                logits.reshape(-1, V), target_ids.reshape(-1), reduction='none'
+            ).reshape(B, T)
+            per_sample_loss = (loss_per_token * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp(min=1)
+
+            group_losses = []
+            for g in range(2):
+                mask_g = (is_shortcut == g)
+                if mask_g.sum() > 0:
+                    group_losses.append(per_sample_loss[mask_g].mean())
+
+            if len(group_losses) >= 2:
+                stacked = torch.stack(group_losses)
+                erm_loss = stacked.mean()
+                variance_penalty = stacked.var()
+                loss = erm_loss + vrex_beta * variance_penalty
+            else:
+                loss = per_sample_loss.mean()
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            scheduler.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+
+        if verbose and (epoch + 1) % max(1, epochs // 5) == 0:
+            print(f"  Epoch {epoch+1}/{epochs}, Loss: {total_loss/n_batches:.4f}")
+
+    return model
+
+
+def train_fishr(model, dataset, epochs=None, device=C.device, verbose=True, cfg=None):
+    """Fishr baseline (Rame et al., 2022).
+
+    Matches gradient variances across groups via EMA.
+    """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    lr = _c.get('lr', C.lr)
+    wd = _c.get('weight_decay', C.weight_decay)
+    fishr_lambda = _c.get('fishr_lambda', C.fishr_lambda)
+    ema_decay = _c.get('fishr_ema_decay', C.fishr_ema_decay)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    train_loader = get_dataloader(dataset['train'], batch_size=bs, shuffle=True)
+    total_steps = epochs * len(train_loader)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
+
+    # EMA gradient variances per group (flattened parameter vector)
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    ema_var = [torch.zeros(n_params, device=device) for _ in range(2)]
+    ema_mean = [torch.zeros(n_params, device=device) for _ in range(2)]
+
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0.0
+        n_batches = 0
+        for batch in train_loader:
+            input_ids = batch['input_ids'].to(device)
+            target_ids = batch['target_ids'].to(device)
+            loss_mask = batch['loss_mask'].to(device)
+            is_shortcut = batch['is_shortcut'].to(device)
+
+            B, T_len = input_ids.shape
+            logits = model(input_ids)
+            V = logits.shape[-1]
+            loss_per_token = F.cross_entropy(
+                logits.reshape(-1, V), target_ids.reshape(-1), reduction='none'
+            ).reshape(B, T_len)
+            per_sample_loss = (loss_per_token * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp(min=1)
+
+            # Compute per-group gradients and update EMA
+            group_grads = {}
+            for g in range(2):
+                mask_g = (is_shortcut == g)
+                if mask_g.sum() > 0:
+                    optimizer.zero_grad()
+                    loss_g = per_sample_loss[mask_g].mean()
+                    loss_g.backward(retain_graph=True)
+                    grads = []
+                    for p in model.parameters():
+                        if p.requires_grad and p.grad is not None:
+                            grads.append(p.grad.detach().flatten())
+                    group_grads[g] = torch.cat(grads)
+                    # Update EMA
+                    ema_mean[g] = ema_decay * ema_mean[g] + (1 - ema_decay) * group_grads[g]
+                    ema_var[g] = ema_decay * ema_var[g] + (1 - ema_decay) * (group_grads[g] - ema_mean[g]) ** 2
+
+            # Fishr penalty: L2 distance between group gradient variances
+            if len(group_grads) == 2:
+                fishr_penalty = (ema_var[0] - ema_var[1]).pow(2).mean()
+            else:
+                fishr_penalty = torch.tensor(0.0, device=device)
+
+            # Recompute full ERM loss and add penalty
+            optimizer.zero_grad()
+            erm_loss = per_sample_loss.mean()
+            loss = erm_loss + fishr_lambda * fishr_penalty
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            scheduler.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+
+        if verbose and (epoch + 1) % max(1, epochs // 5) == 0:
+            print(f"  Epoch {epoch+1}/{epochs}, Loss: {total_loss/n_batches:.4f}")
+
+    return model
+
+
+def train_lff(model, dataset, epochs=None, device=C.device, verbose=True, cfg=None):
+    """LfF (Learning from Failure) baseline (Nam et al., 2020).
+
+    Trains a biased model B with GCE loss, then upweights samples that B finds hard.
+    """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    lr = _c.get('lr', C.lr)
+    wd = _c.get('weight_decay', C.weight_decay)
+    q = _c.get('lff_q', C.lff_q)
+
+    # Biased model (amplifies shortcuts)
+    biased_model = copy.deepcopy(model)
+    opt_biased = torch.optim.AdamW(biased_model.parameters(), lr=lr, weight_decay=wd)
+    opt_debiased = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    train_loader = get_dataloader(dataset['train'], batch_size=bs, shuffle=True)
+    total_steps = epochs * len(train_loader)
+    sched_biased = torch.optim.lr_scheduler.CosineAnnealingLR(opt_biased, T_max=total_steps, eta_min=1e-5)
+    sched_debiased = torch.optim.lr_scheduler.CosineAnnealingLR(opt_debiased, T_max=total_steps, eta_min=1e-5)
+
+    biased_model.train()
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0.0
+        n_batches = 0
+        for batch in train_loader:
+            input_ids = batch['input_ids'].to(device)
+            target_ids = batch['target_ids'].to(device)
+            loss_mask = batch['loss_mask'].to(device)
+
+            B, T_len = input_ids.shape
+
+            # --- Biased model: GCE loss ---
+            logits_b = biased_model(input_ids)
+            V = logits_b.shape[-1]
+            probs_b = F.softmax(logits_b, dim=-1)
+            p_t_b = probs_b.gather(2, target_ids.unsqueeze(-1)).squeeze(-1).clamp(min=1e-7)
+            gce_per_token = (1.0 - p_t_b ** q) / q * loss_mask
+            gce_loss = gce_per_token.sum() / loss_mask.sum().clamp(min=1)
+
+            opt_biased.zero_grad()
+            gce_loss.backward()
+            torch.nn.utils.clip_grad_norm_(biased_model.parameters(), 1.0)
+            opt_biased.step()
+            sched_biased.step()
+
+            # --- Debiased model: reweighted CE ---
+            logits_d = model(input_ids)
+            ce_per_token = F.cross_entropy(
+                logits_d.reshape(-1, V), target_ids.reshape(-1), reduction='none'
+            ).reshape(B, T_len)
+
+            with torch.no_grad():
+                logits_b2 = biased_model(input_ids)
+                ce_b = F.cross_entropy(
+                    logits_b2.reshape(-1, V), target_ids.reshape(-1), reduction='none'
+                ).reshape(B, T_len)
+                # Per-sample losses for reweighting
+                loss_b_sample = (ce_b * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp(min=1)
+                loss_d_sample = (ce_per_token.detach() * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp(min=1)
+                # Weight: samples biased model finds hard get upweighted
+                weights = loss_b_sample / (loss_b_sample + loss_d_sample + 1e-8)
+
+            per_sample_loss = (ce_per_token * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp(min=1)
+            loss = (per_sample_loss * weights).mean()
+
+            opt_debiased.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt_debiased.step()
+            sched_debiased.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+
+        if verbose and (epoch + 1) % max(1, epochs // 5) == 0:
+            print(f"  Epoch {epoch+1}/{epochs}, Loss: {total_loss/n_batches:.4f}")
+
+    del biased_model
+    return model
+
+
+def train_influence_filtering(model, dataset, epochs=None, device=C.device, verbose=True, cfg=None):
+    """Influence-Function-Based Selection baseline.
+
+    Phase 1: Warmup on a copy.
+    Phase 2: Compute proxy influence scores (gradient dot product).
+    Phase 3: Remove most harmful samples.
+    Phase 4: Retrain on filtered dataset.
+    """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    warmup_epochs = _c.get('influence_warmup_epochs', C.influence_warmup_epochs)
+    remove_ratio = _c.get('influence_remove_ratio', C.influence_remove_ratio)
+
+    # Phase 1: Warmup
+    if verbose:
+        print(f"  Influence Phase 1: Warmup ({warmup_epochs} epochs)")
+    warmup_model = copy.deepcopy(model)
+    train_standard(warmup_model, dataset, epochs=warmup_epochs, device=device, verbose=False, cfg=cfg)
+
+    # Phase 2: Compute proxy influence scores
+    if verbose:
+        print(f"  Influence Phase 2: Computing influence scores...")
+    warmup_model.eval()
+
+    # Get validation gradient
+    val_loader = get_dataloader(dataset['val'], shuffle=False, batch_size=bs)
+    warmup_model.train()
+    val_grad = None
+    n_val_batches = 0
+    for batch in val_loader:
+        input_ids = batch['input_ids'].to(device)
+        target_ids = batch['target_ids'].to(device)
+        loss_mask = batch['loss_mask'].to(device)
+        warmup_model.zero_grad()
+        logits = warmup_model(input_ids)
+        loss = masked_ce_loss(logits, target_ids, loss_mask)
+        loss.backward()
+        grads = []
+        for p in warmup_model.parameters():
+            if p.requires_grad and p.grad is not None:
+                grads.append(p.grad.detach().flatten())
+        batch_grad = torch.cat(grads)
+        val_grad = batch_grad if val_grad is None else val_grad + batch_grad
+        n_val_batches += 1
+    val_grad = val_grad / n_val_batches
+
+    # Compute per-sample influence proxy: dot(g_train_i, g_val)
+    influence_scores = []
+    eval_loader = get_dataloader(dataset['train'], shuffle=False, batch_size=1)
+    warmup_model.train()
+    for batch in eval_loader:
+        input_ids = batch['input_ids'].to(device)
+        target_ids = batch['target_ids'].to(device)
+        loss_mask = batch['loss_mask'].to(device)
+        warmup_model.zero_grad()
+        logits = warmup_model(input_ids)
+        loss = masked_ce_loss(logits, target_ids, loss_mask)
+        loss.backward()
+        grads = []
+        for p in warmup_model.parameters():
+            if p.requires_grad and p.grad is not None:
+                grads.append(p.grad.detach().flatten())
+        train_grad = torch.cat(grads)
+        # Negative influence = harmful (increases val loss)
+        influence = train_grad.dot(val_grad).item()
+        influence_scores.append(influence)
+
+    del warmup_model
+
+    # Phase 3: Remove most harmful samples (lowest influence = most harmful)
+    n_remove = int(len(influence_scores) * remove_ratio)
+    sorted_idx = sorted(range(len(influence_scores)), key=lambda i: influence_scores[i])
+    keep_indices = sorted_idx[n_remove:]  # remove the most harmful (lowest dot product)
+
+    filtered_samples = [dataset['train'].samples[i] for i in keep_indices]
+    if verbose:
+        print(f"  Influence Phase 3: Removed {n_remove}, kept {len(filtered_samples)}/{len(dataset['train'])}")
+
+    from src.data import ReasoningDataset
+    pad_id = getattr(dataset['train'], 'pad_id', C.PAD)
+    filtered_dataset = {**dataset, 'train': ReasoningDataset(filtered_samples, pad_id=pad_id)}
+
+    # Phase 4: Retrain
+    if verbose:
+        print(f"  Influence Phase 4: Retraining ({epochs} epochs)")
+    return train_standard(model, filtered_dataset, epochs=epochs, device=device, verbose=verbose, cfg=cfg)
+
+
+def train_meta_reweight(model, dataset, epochs=None, device=C.device, verbose=True, cfg=None):
+    """Meta-Reweighting baseline (Ren et al., 2018).
+
+    Learns per-sample weights via meta-learning on validation loss.
+    """
+    _c = cfg or {}
+    epochs = epochs if epochs is not None else _c.get('epochs', C.epochs)
+    bs = _c.get('batch_size', C.batch_size)
+    lr = _c.get('lr', C.lr)
+    wd = _c.get('weight_decay', C.weight_decay)
+    meta_lr = _c.get('meta_reweight_lr', C.meta_reweight_lr)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    train_loader = get_dataloader(dataset['train'], batch_size=bs, shuffle=True)
+    val_loader = get_dataloader(dataset['val'], batch_size=bs, shuffle=True)
+    total_steps = epochs * len(train_loader)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
+
+    # Per-sample weights
+    n_train = len(dataset['train'])
+    sample_weights = torch.ones(n_train, device=device)
+
+    model.train()
+    val_iter = iter(val_loader)
+
+    for epoch in range(epochs):
+        total_loss = 0.0
+        n_batches = 0
+        sample_idx = 0
+
+        for batch in train_loader:
+            input_ids = batch['input_ids'].to(device)
+            target_ids = batch['target_ids'].to(device)
+            loss_mask = batch['loss_mask'].to(device)
+            cur_bs = input_ids.size(0)
+
+            # Get weights for this batch
+            end_idx = min(sample_idx + cur_bs, n_train)
+            w = sample_weights[sample_idx:end_idx].detach().clone()
+            if len(w) < cur_bs:
+                w = torch.ones(cur_bs, device=device)
+
+            # Meta-step every 10 batches
+            if n_batches % 10 == 0:
+                # Get a val batch
+                try:
+                    val_batch = next(val_iter)
+                except StopIteration:
+                    val_iter = iter(val_loader)
+                    val_batch = next(val_iter)
+
+                # Compute training loss with current weights (requires_grad for meta)
+                w_meta = w.clone().requires_grad_(True)
+                logits = model(input_ids)
+                B, T, V = logits.shape
+                lpt = F.cross_entropy(
+                    logits.reshape(-1, V), target_ids.reshape(-1), reduction='none'
+                ).reshape(B, T)
+                psl = (lpt * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp(min=1)
+                train_loss = (psl * w_meta).mean()
+
+                # Virtual gradient step
+                model_grads = torch.autograd.grad(train_loss, model.parameters(),
+                                                   create_graph=True, allow_unused=True)
+
+                # Compute val loss on virtual parameters
+                val_in = val_batch['input_ids'].to(device)
+                val_tgt = val_batch['target_ids'].to(device)
+                val_mask = val_batch['loss_mask'].to(device)
+                val_logits = model(val_in)
+                val_loss = masked_ce_loss(val_logits, val_tgt, val_mask)
+
+                # Meta-gradient: how weights affect val loss (through virtual step)
+                if w_meta.grad is not None:
+                    w_meta.grad.zero_()
+                meta_grad = torch.autograd.grad(val_loss, w_meta, allow_unused=True)[0]
+                if meta_grad is not None:
+                    # Update sample weights
+                    w_updated = w - meta_lr * meta_grad.detach()
+                    w_updated = w_updated.clamp(min=0.0)
+                    w_norm = w_updated / (w_updated.mean() + 1e-8)
+                    sample_weights[sample_idx:end_idx] = w_norm[:end_idx - sample_idx]
+
+            # Normal training step with current weights
+            optimizer.zero_grad()
+            logits = model(input_ids)
+            B, T, V = logits.shape
+            loss_per_token = F.cross_entropy(
+                logits.reshape(-1, V), target_ids.reshape(-1), reduction='none'
+            ).reshape(B, T)
+            per_sample_loss = (loss_per_token * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp(min=1)
+            w_cur = sample_weights[sample_idx:end_idx].detach()
+            if len(w_cur) < cur_bs:
+                w_cur = torch.ones(cur_bs, device=device)
+            loss = (per_sample_loss * w_cur).mean()
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            scheduler.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+            sample_idx = end_idx % n_train
+
+        if verbose and (epoch + 1) % max(1, epochs // 5) == 0:
+            print(f"  Epoch {epoch+1}/{epochs}, Loss: {total_loss/n_batches:.4f}")
+
+    return model
+
+
 def _compute_sample_scores(model, dataset, device=C.device, cfg=None):
     """Compute ShortcutScores for training samples (one-time).
 

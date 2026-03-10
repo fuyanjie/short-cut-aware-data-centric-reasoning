@@ -26,7 +26,9 @@ from src.data import (generate_math_dataset, generate_financial_dataset,
                       generate_causal_dataset, get_dataloader)
 from src.model import create_model, create_model_nl, count_parameters
 from src.trainer import (train_standard, train_data_filtering, train_our_method,
-                         train_jtt, train_focal_loss, train_group_dro)
+                         train_jtt, train_focal_loss, train_group_dro,
+                         train_irm, train_vrex, train_fishr,
+                         train_lff, train_influence_filtering, train_meta_reweight)
 from src.evaluate import (run_full_evaluation, run_full_evaluation_nl,
                           evaluate_gradient_alignment)
 from src.visualize import (generate_table1, generate_table2, generate_table3,
@@ -79,7 +81,7 @@ def run_synthetic_experiments(all_results, collected_data_all, dataset_names):
         print(f'\n--- Dataset: {ds_name} ---')
 
         # (a) Standard Fine-Tuning
-        print('\n[1/7] Training: Standard Fine-Tuning...')
+        print('\n[1/13] Training: Standard Fine-Tuning...')
         set_seed()
         model_ft = create_model()
         t0 = time.time()
@@ -93,14 +95,14 @@ def run_synthetic_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_ft["robustness"]:.3f}')
 
         # (b) Self-Consistency Decoding
-        print('\n[2/7] Evaluating: Self-Consistency Decoding...')
+        print('\n[2/13] Evaluating: Self-Consistency Decoding...')
         results_sc = run_full_evaluation(model_ft, ds, use_self_consistency=True)
         all_results[(ds_name, 'self_consistency')] = results_sc
         print(f'  Accuracy: {results_sc["accuracy_clean"]:.3f}, '
               f'Robustness: {results_sc["robustness"]:.3f}')
 
         # (c) Data Filtering
-        print('\n[3/7] Training: Data Filtering...')
+        print('\n[3/13] Training: Data Filtering...')
         set_seed()
         model_df = create_model()
         t0 = time.time()
@@ -115,7 +117,7 @@ def run_synthetic_experiments(all_results, collected_data_all, dataset_names):
               f'F1: {results_df["shortcut_f1"]:.3f}')
 
         # (d) JTT
-        print('\n[4/7] Training: JTT (Just Train Twice)...')
+        print('\n[4/13] Training: JTT (Just Train Twice)...')
         set_seed()
         model_jtt = create_model()
         t0 = time.time()
@@ -129,7 +131,7 @@ def run_synthetic_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_jtt["robustness"]:.3f}')
 
         # (e) Focal Loss
-        print('\n[5/7] Training: Focal Loss...')
+        print('\n[5/13] Training: Focal Loss...')
         set_seed()
         model_fl = create_model()
         t0 = time.time()
@@ -143,7 +145,7 @@ def run_synthetic_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_fl["robustness"]:.3f}')
 
         # (f) Group DRO
-        print('\n[6/7] Training: Group DRO...')
+        print('\n[6/13] Training: Group DRO...')
         set_seed()
         model_gdro = create_model()
         t0 = time.time()
@@ -156,8 +158,92 @@ def run_synthetic_experiments(all_results, collected_data_all, dataset_names):
         print(f'  Accuracy: {results_gdro["accuracy_clean"]:.3f}, '
               f'Robustness: {results_gdro["robustness"]:.3f}')
 
-        # (g) Our Full Method
-        print('\n[7/7] Training: Our Method (Reweighting + Gradient Surgery)...')
+        # (g) IRM
+        print('\n[7/13] Training: IRM...')
+        set_seed()
+        model_irm = create_model()
+        t0 = time.time()
+        train_irm(model_irm, ds)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_irm = run_full_evaluation(model_irm, ds, compute_f1=False)
+        all_results[(ds_name, 'irm')] = results_irm
+        print(f'  Accuracy: {results_irm["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_irm["robustness"]:.3f}')
+
+        # (h) V-REx
+        print('\n[8/13] Training: V-REx...')
+        set_seed()
+        model_vrex = create_model()
+        t0 = time.time()
+        train_vrex(model_vrex, ds)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_vrex = run_full_evaluation(model_vrex, ds, compute_f1=False)
+        all_results[(ds_name, 'vrex')] = results_vrex
+        print(f'  Accuracy: {results_vrex["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_vrex["robustness"]:.3f}')
+
+        # (i) Fishr
+        print('\n[9/13] Training: Fishr...')
+        set_seed()
+        model_fishr = create_model()
+        t0 = time.time()
+        train_fishr(model_fishr, ds)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_fishr = run_full_evaluation(model_fishr, ds, compute_f1=False)
+        all_results[(ds_name, 'fishr')] = results_fishr
+        print(f'  Accuracy: {results_fishr["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_fishr["robustness"]:.3f}')
+
+        # (j) LfF
+        print('\n[10/13] Training: LfF...')
+        set_seed()
+        model_lff = create_model()
+        t0 = time.time()
+        train_lff(model_lff, ds)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_lff = run_full_evaluation(model_lff, ds, compute_f1=False)
+        all_results[(ds_name, 'lff')] = results_lff
+        print(f'  Accuracy: {results_lff["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_lff["robustness"]:.3f}')
+
+        # (k) Influence Filtering
+        print('\n[11/13] Training: Influence Filtering...')
+        set_seed()
+        model_inf = create_model()
+        t0 = time.time()
+        train_influence_filtering(model_inf, ds)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_inf = run_full_evaluation(model_inf, ds, compute_f1=False)
+        all_results[(ds_name, 'influence_filtering')] = results_inf
+        print(f'  Accuracy: {results_inf["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_inf["robustness"]:.3f}')
+
+        # (l) Meta-Reweighting
+        print('\n[12/13] Training: Meta-Reweighting...')
+        set_seed()
+        model_meta = create_model()
+        t0 = time.time()
+        train_meta_reweight(model_meta, ds)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_meta = run_full_evaluation(model_meta, ds, compute_f1=False)
+        all_results[(ds_name, 'meta_reweight')] = results_meta
+        print(f'  Accuracy: {results_meta["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_meta["robustness"]:.3f}')
+
+        # (m) Our Full Method
+        print('\n[13/13] Training: Our Method (Reweighting + Gradient Surgery)...')
         set_seed()
         model_ours = create_model()
         t0 = time.time()
@@ -178,7 +264,9 @@ def run_synthetic_experiments(all_results, collected_data_all, dataset_names):
               f'F1: {results_ours["shortcut_f1"]:.3f}, '
               f'Alignment: {results_ours["gradient_alignment"]:.3f}')
 
-        del model_ft, model_df, model_jtt, model_fl, model_gdro, model_ours
+        del model_ft, model_df, model_jtt, model_fl, model_gdro
+        del model_irm, model_vrex, model_fishr, model_lff, model_inf, model_meta
+        del model_ours
         _empty_cache()
 
     # ===================================================================
@@ -257,6 +345,19 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
         'score_batch_size': C.NL.score_batch_size,
         'df_warmup_epochs': C.NL.df_warmup_epochs,
         'df_confidence_threshold': C.NL.df_confidence_threshold,
+        'jtt_warmup_epochs': C.NL.jtt_warmup_epochs,
+        'jtt_upweight_factor': C.NL.jtt_upweight_factor,
+        'focal_gamma': C.NL.focal_gamma,
+        'gdro_eta': C.NL.gdro_eta,
+        'irm_lambda': C.NL.irm_lambda,
+        'irm_anneal_epochs': C.NL.irm_anneal_epochs,
+        'vrex_beta': C.NL.vrex_beta,
+        'fishr_lambda': C.NL.fishr_lambda,
+        'fishr_ema_decay': C.NL.fishr_ema_decay,
+        'lff_q': C.NL.lff_q,
+        'influence_warmup_epochs': C.NL.influence_warmup_epochs,
+        'influence_remove_ratio': C.NL.influence_remove_ratio,
+        'meta_reweight_lr': C.NL.meta_reweight_lr,
     }
 
     # Check NL model size
@@ -288,7 +389,7 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
         print(f'\n--- Dataset: {ds_name} ---')
 
         # (a) Standard Fine-Tuning
-        print('\n[1/7] Training: Standard Fine-Tuning...')
+        print('\n[1/13] Training: Standard Fine-Tuning...')
         set_seed()
         model_ft = create_model_nl()
         t0 = time.time()
@@ -302,7 +403,7 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_ft["robustness"]:.3f}')
 
         # (b) Self-Consistency Decoding
-        print('\n[2/7] Evaluating: Self-Consistency Decoding...')
+        print('\n[2/13] Evaluating: Self-Consistency Decoding...')
         results_sc = run_full_evaluation_nl(model_ft, ds, tokenizer,
                                              use_self_consistency=True)
         all_results[(ds_name, 'self_consistency')] = results_sc
@@ -310,7 +411,7 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_sc["robustness"]:.3f}')
 
         # (c) Data Filtering
-        print('\n[3/7] Training: Data Filtering...')
+        print('\n[3/13] Training: Data Filtering...')
         set_seed()
         model_df = create_model_nl()
         t0 = time.time()
@@ -325,7 +426,7 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
               f'F1: {results_df["shortcut_f1"]:.3f}')
 
         # (d) JTT
-        print('\n[4/7] Training: JTT (Just Train Twice)...')
+        print('\n[4/13] Training: JTT (Just Train Twice)...')
         set_seed()
         model_jtt = create_model_nl()
         t0 = time.time()
@@ -339,7 +440,7 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_jtt["robustness"]:.3f}')
 
         # (e) Focal Loss
-        print('\n[5/7] Training: Focal Loss...')
+        print('\n[5/13] Training: Focal Loss...')
         set_seed()
         model_fl = create_model_nl()
         t0 = time.time()
@@ -353,7 +454,7 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
               f'Robustness: {results_fl["robustness"]:.3f}')
 
         # (f) Group DRO
-        print('\n[6/7] Training: Group DRO...')
+        print('\n[6/13] Training: Group DRO...')
         set_seed()
         model_gdro = create_model_nl()
         t0 = time.time()
@@ -366,8 +467,92 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
         print(f'  Accuracy: {results_gdro["accuracy_clean"]:.3f}, '
               f'Robustness: {results_gdro["robustness"]:.3f}')
 
-        # (g) Our Full Method
-        print('\n[7/7] Training: Our Method (Reweighting + Gradient Surgery)...')
+        # (g) IRM
+        print('\n[7/13] Training: IRM...')
+        set_seed()
+        model_irm = create_model_nl()
+        t0 = time.time()
+        train_irm(model_irm, ds, cfg=nl_cfg)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_irm = run_full_evaluation_nl(model_irm, ds, tokenizer, compute_f1=False)
+        all_results[(ds_name, 'irm')] = results_irm
+        print(f'  Accuracy: {results_irm["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_irm["robustness"]:.3f}')
+
+        # (h) V-REx
+        print('\n[8/13] Training: V-REx...')
+        set_seed()
+        model_vrex = create_model_nl()
+        t0 = time.time()
+        train_vrex(model_vrex, ds, cfg=nl_cfg)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_vrex = run_full_evaluation_nl(model_vrex, ds, tokenizer, compute_f1=False)
+        all_results[(ds_name, 'vrex')] = results_vrex
+        print(f'  Accuracy: {results_vrex["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_vrex["robustness"]:.3f}')
+
+        # (i) Fishr
+        print('\n[9/13] Training: Fishr...')
+        set_seed()
+        model_fishr = create_model_nl()
+        t0 = time.time()
+        train_fishr(model_fishr, ds, cfg=nl_cfg)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_fishr = run_full_evaluation_nl(model_fishr, ds, tokenizer, compute_f1=False)
+        all_results[(ds_name, 'fishr')] = results_fishr
+        print(f'  Accuracy: {results_fishr["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_fishr["robustness"]:.3f}')
+
+        # (j) LfF
+        print('\n[10/13] Training: LfF...')
+        set_seed()
+        model_lff = create_model_nl()
+        t0 = time.time()
+        train_lff(model_lff, ds, cfg=nl_cfg)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_lff = run_full_evaluation_nl(model_lff, ds, tokenizer, compute_f1=False)
+        all_results[(ds_name, 'lff')] = results_lff
+        print(f'  Accuracy: {results_lff["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_lff["robustness"]:.3f}')
+
+        # (k) Influence Filtering
+        print('\n[11/13] Training: Influence Filtering...')
+        set_seed()
+        model_inf = create_model_nl()
+        t0 = time.time()
+        train_influence_filtering(model_inf, ds, cfg=nl_cfg)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_inf = run_full_evaluation_nl(model_inf, ds, tokenizer, compute_f1=False)
+        all_results[(ds_name, 'influence_filtering')] = results_inf
+        print(f'  Accuracy: {results_inf["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_inf["robustness"]:.3f}')
+
+        # (l) Meta-Reweighting
+        print('\n[12/13] Training: Meta-Reweighting...')
+        set_seed()
+        model_meta = create_model_nl()
+        t0 = time.time()
+        train_meta_reweight(model_meta, ds, cfg=nl_cfg)
+        print(f'  Training time: {time.time()-t0:.1f}s')
+
+        print('  Evaluating...')
+        results_meta = run_full_evaluation_nl(model_meta, ds, tokenizer, compute_f1=False)
+        all_results[(ds_name, 'meta_reweight')] = results_meta
+        print(f'  Accuracy: {results_meta["accuracy_clean"]:.3f}, '
+              f'Robustness: {results_meta["robustness"]:.3f}')
+
+        # (m) Our Full Method
+        print('\n[13/13] Training: Our Method (Reweighting + Gradient Surgery)...')
         set_seed()
         model_ours = create_model_nl()
         t0 = time.time()
@@ -388,7 +573,9 @@ def run_realworld_experiments(all_results, collected_data_all, dataset_names):
               f'F1: {results_ours["shortcut_f1"]:.3f}, '
               f'Alignment: {results_ours["gradient_alignment"]:.3f}')
 
-        del model_ft, model_df, model_jtt, model_fl, model_gdro, model_ours
+        del model_ft, model_df, model_jtt, model_fl, model_gdro
+        del model_irm, model_vrex, model_fishr, model_lff, model_inf, model_meta
+        del model_ours
         _empty_cache()
 
     # ===================================================================

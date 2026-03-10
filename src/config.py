@@ -67,6 +67,16 @@ class Config:
         focal_gamma = 2.0
         gdro_eta = 0.01
 
+        irm_lambda = 1.0
+        irm_anneal_epochs = 5
+        vrex_beta = 1.0
+        fishr_lambda = 1.0
+        fishr_ema_decay = 0.95
+        lff_q = 0.7
+        influence_warmup_epochs = 5
+        influence_remove_ratio = 0.3
+        meta_reweight_lr = 0.01
+
     else:
         vocab_size = 35
         d_model = 128
@@ -98,6 +108,16 @@ class Config:
         focal_gamma = 2.0
         gdro_eta = 0.01
 
+        irm_lambda = 1.0
+        irm_anneal_epochs = 5
+        vrex_beta = 1.0
+        fishr_lambda = 1.0
+        fishr_ema_decay = 0.95
+        lff_q = 0.7
+        influence_warmup_epochs = 5
+        influence_remove_ratio = 0.3
+        meta_reweight_lr = 0.01
+
     # ================================================================
     # Real-world dataset config (GSM8K / MATH)
     # ================================================================
@@ -128,6 +148,16 @@ class Config:
         jtt_upweight_factor = 3
         focal_gamma = 2.0
         gdro_eta = 0.01
+
+        irm_lambda = 1.0
+        irm_anneal_epochs = 5
+        vrex_beta = 1.0
+        fishr_lambda = 1.0
+        fishr_ema_decay = 0.95
+        lff_q = 0.7
+        influence_warmup_epochs = 5
+        influence_remove_ratio = 0.3
+        meta_reweight_lr = 0.01
 
         # Special token strings (resolved to IDs at runtime by tokenizer)
         question_sep = "\n\nSolution:\n"   # separates question from reasoning

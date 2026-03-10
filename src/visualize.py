@@ -29,7 +29,9 @@ def generate_table1(all_results, datasets):
     Values are averaged across datasets.
     """
     methods = ['standard_ft', 'self_consistency', 'data_filtering',
-               'jtt', 'focal_loss', 'group_dro', 'full_method']
+               'jtt', 'focal_loss', 'group_dro',
+               'irm', 'vrex', 'fishr', 'lff', 'influence_filtering', 'meta_reweight',
+               'full_method']
     method_names = {
         'standard_ft': 'Standard Fine-Tuning',
         'self_consistency': 'Self-Consistency Decoding',
@@ -37,13 +39,19 @@ def generate_table1(all_results, datasets):
         'jtt': 'JTT (Just Train Twice)',
         'focal_loss': 'Focal Loss',
         'group_dro': 'Group DRO',
+        'irm': 'IRM',
+        'vrex': 'V-REx',
+        'fishr': 'Fishr',
+        'lff': 'LfF',
+        'influence_filtering': 'Influence Filtering',
+        'meta_reweight': 'Meta-Reweighting',
         'full_method': 'Our Method (Full)',
     }
 
     lines = []
-    lines.append('=' * 90)
+    lines.append('=' * 100)
     lines.append('Table 1: Overall Method Performance and Baseline Superiority')
-    lines.append('=' * 90)
+    lines.append('=' * 100)
     lines.append(f'{"Method":<30} {"Accuracy":>10} {"Robustness":>12} {"Reasoning":>12} {"SC Det F1":>10}')
     lines.append('-' * 90)
 
@@ -320,9 +328,13 @@ def generate_training_curves(training_logs, save_name='training_curves.png'):
 def generate_summary_bar_chart(all_results, datasets):
     """Bar chart comparing methods across accuracy and robustness."""
     methods = ['standard_ft', 'self_consistency', 'data_filtering',
-               'jtt', 'focal_loss', 'group_dro', 'full_method']
+               'jtt', 'focal_loss', 'group_dro',
+               'irm', 'vrex', 'fishr', 'lff', 'influence_filtering', 'meta_reweight',
+               'full_method']
     method_labels = ['Standard FT', 'Self-Consistency', 'Data Filtering',
-                     'JTT', 'Focal Loss', 'Group DRO', 'Our Method']
+                     'JTT', 'Focal Loss', 'Group DRO',
+                     'IRM', 'V-REx', 'Fishr', 'LfF', 'Influence Filt.', 'Meta-Reweight',
+                     'Our Method']
 
     avg_clean = []
     avg_perturbed = []

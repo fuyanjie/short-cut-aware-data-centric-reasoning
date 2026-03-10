@@ -1,0 +1,11 @@
+======================================================================
+Table 4: Ablation Studies - Component Contributions
+======================================================================
+Component Removed                       Acc Drop     Rob Drop
+----------------------------------------------------------------------
+Remove Reweighting (GS only)                4.0%        12.4%
+Remove Grad Surgery (RW only)               3.1%        10.0%
+
+Full Method Accuracy: 74.9%
+Full Method Robustness: 39.3%
+======================================================================
