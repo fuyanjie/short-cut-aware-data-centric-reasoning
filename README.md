@@ -18,15 +18,17 @@ Large language models often exploit **spurious shortcuts** in training data rath
 
 ```
 ├── run_all.py              # Main experiment runner
+├── hp_search.py            # Hyperparameter search (multi-GPU parallel grid search)
 ├── src/
 │   ├── config.py           # Configuration (dual-profile: local/server)
 │   ├── data.py             # Synthetic datasets (Math, Financial, Causal)
 │   ├── data_realworld.py   # Real-world datasets (GSM8K, MATH)
 │   ├── model.py            # SmallGPT transformer model
 │   ├── methods.py          # Core: ShortcutScore, Reweighting, Gradient Surgery
-│   ├── trainer.py          # 12 training functions (baselines + our method)
+│   ├── trainer.py          # Training functions (baselines + our method)
 │   ├── evaluate.py         # Evaluation metrics (accuracy, robustness, F1)
 │   └── visualize.py        # Result table generation
+├── latex/                  # Paper LaTeX source
 ├── results/                # Experiment output tables
 ├── requirements.txt
 └── README.md
@@ -102,39 +104,125 @@ Override with environment variable:
 EXPERIMENT_SCALE=server DATASET_TYPE=all python3 run_all.py
 ```
 
-### Running on a Server (SSH-safe)
+## Running on a Server
+
+### Basic Experiments (SSH-safe)
 
 ```bash
-# Option 1: nohup
-nohup EXPERIMENT_SCALE=server DATASET_TYPE=all python3 run_all.py > output.log 2>&1 &
+# Option 1: nohup (simplest, survives SSH disconnection)
+nohup env EXPERIMENT_SCALE=server python3 run_all.py > run.log 2>&1 &
 
-# Option 2: tmux (recommended — can reconnect)
+# Option 2: tmux (recommended — can reconnect to see live output)
 tmux new -s experiment
-EXPERIMENT_SCALE=server DATASET_TYPE=all python3 run_all.py
+EXPERIMENT_SCALE=server python3 run_all.py
 # Ctrl+B, D to detach; tmux attach -t experiment to reconnect
+
+# Synthetic only
+nohup env EXPERIMENT_SCALE=server DATASET_TYPE=synthetic python3 run_all.py > run_synthetic.log 2>&1 &
+
+# Real-world only (GSM8K + MATH)
+nohup env EXPERIMENT_SCALE=server DATASET_TYPE=realworld python3 run_all.py > run_realworld.log 2>&1 &
+
+# All datasets
+nohup env EXPERIMENT_SCALE=server DATASET_TYPE=all python3 run_all.py > run_all.log 2>&1 &
 ```
 
-## Results (Synthetic Datasets)
+> **Note:** Use `nohup env VAR=val python3 ...` (not `nohup VAR=val python3 ...`). The `env` command is required for `nohup` to recognize environment variables.
 
-### Table 1: Overall Performance
+### Hyperparameter Search
 
-| Method | Accuracy | Robustness | Reasoning |
-|--------|----------|------------|-----------|
-| Standard Fine-Tuning | 69.3% | 26.4% | 55.1% |
-| Data Filtering | 56.0% | 49.8% | 44.2% |
-| Group DRO | 73.3% | 36.9% | 60.0% |
-| IRM | 74.9% | 39.1% | 61.3% |
-| Influence Filtering | 73.6% | 57.6% | 60.2% |
-| **Our Method (Full)** | **74.9%** | **39.3%** | **61.6%** |
+The `hp_search.py` script performs a parallel grid search over SART hyperparameters across all available GPUs.
 
-### Table 3: Ablation — Component Contributions
+```bash
+# Phase 1: Primary search over (lambda, gamma, rho)
+# 60 configs, ~2.25 hours on 4× H100
+nohup env EXPERIMENT_SCALE=server python3 hp_search.py --output-dir hp_results > hp_search.log 2>&1 &
 
-| Configuration | Accuracy | Robustness | Grad Align |
-|---------------|----------|------------|------------|
-| Standard FT | 69.3% | 26.4% | -0.16 |
-| Gradient Surgery Only | 70.9% | 26.9% | -0.15 |
-| Reweighting Only | 71.8% | 29.3% | -0.14 |
-| **Full Method (Both)** | **74.9%** | **39.3%** | **-0.10** |
+# Phase 2: Fine-tune (tau_A, tau_R, phase3_lr_factor) around best from Phase 1
+# 36 configs, ~1.5 hours on 4× H100
+nohup env EXPERIMENT_SCALE=server python3 hp_search.py --phase 2 --output-dir hp_results > hp_search_p2.log 2>&1 &
+
+# Quick smoke test (8 configs, local profile, ~2 min)
+python3 hp_search.py --smoke-test --output-dir hp_test
+```
+
+**Search space (Phase 1):**
+
+| Parameter | Current Default | Search Values | Role |
+|-----------|----------------|---------------|------|
+| `lambda_` | 2.0 | 0.2, 0.5, 0.8, 1.0, 1.5 | Reweighting strength |
+| `gamma` | 0.8 | 0.1, 0.2, 0.3, 0.5 | Gradient projection strength |
+| `rho` | 0.7 | 0.1, 0.3, 0.5 | Answer-gradient suppression |
+
+**Search space (Phase 2 — around best from Phase 1):**
+
+| Parameter | Search Values | Role |
+|-----------|---------------|------|
+| `tau_A` | 0.1, 0.2, 0.3, 0.4 | Alignment threshold |
+| `tau_R` | 0.3, 0.5, 0.7 | Concentration threshold |
+| `phase3_lr_factor` | 0.3, 0.5, 0.7 | Phase 3 learning rate multiplier |
+
+**Output files:**
+- `hp_results/results_final.json` — All configs ranked by combined score
+- `hp_results/best_config.json` — Best hyperparameter configuration
+- `hp_results/results_partial.json` — Incremental results (check progress)
+
+**Monitoring progress:**
+```bash
+# Check how many configs have completed
+cat hp_results/results_partial.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'{len(d)} configs done')"
+
+# View current top results
+tail -20 hp_search.log
+```
+
+### After Hyperparameter Search
+
+Once you find the best hyperparameters, update `src/config.py` and re-run `run_all.py` for final results:
+```bash
+# Re-run full experiments with optimized hyperparameters
+nohup env EXPERIMENT_SCALE=server python3 run_all.py > run_final.log 2>&1 &
+```
+
+### Git on Server
+
+```bash
+# Save and push results
+git add -A
+git commit -m "Add experiment results"
+git push origin main
+
+# Pull latest changes
+git config pull.rebase true   # one-time setup
+git pull
+```
+
+## Results (Server-Scale, Synthetic Datasets)
+
+### Main Results (averaged across 3 datasets)
+
+| Method | Accuracy | Robustness | Reasoning | SC Det. F1 |
+|--------|----------|------------|-----------|------------|
+| Standard Fine-Tuning | 59.6% | 1.9% | 43.8% | — |
+| Self-Consistency | 64.1% | 12.4% | 43.8% | — |
+| Data Filtering | 68.6% | 20.2% | 57.7% | 0.82 |
+| JTT | 59.0% | 1.0% | 43.1% | — |
+| Focal Loss | 60.2% | 3.8% | 44.8% | — |
+| Group DRO | **78.2%** | **48.2%** | **69.9%** | — |
+| **SART (Ours)** | 75.8% | 39.9% | 66.0% | 0.66 |
+
+SART achieves +16.2pp accuracy and +38.0pp robustness over SFT, and the **best robustness on Financial-Analysis** (58.1%, surpassing Group DRO's 53.9%).
+
+### Ablation — Component Contributions
+
+| Configuration | Accuracy | Robustness | Grad. Align. |
+|---------------|----------|------------|--------------|
+| Standard FT | 59.6% | 1.9% | −0.07 |
+| Reweighting Only | 64.7% | 13.1% | — |
+| Gradient Surgery Only | 81.0% | 51.3% | — |
+| **Full Method (Both)** | 75.8% | 39.9% | **+0.10** |
+
+Gradient Surgery is the primary mechanism. The full method achieves the best gradient alignment (+0.10 vs −0.07 for SFT).
 
 ## Model Architecture
 
@@ -147,15 +235,17 @@ EXPERIMENT_SCALE=server DATASET_TYPE=all python3 run_all.py
 
 ## Key Hyperparameters
 
-| Parameter | Symbol | Default |
-|-----------|--------|---------|
-| Bias weight | α | 1.0 |
-| Consistency weight | β | 1.0 |
-| Answer suppression threshold | τ_A | 0.3 |
-| Reasoning consistency threshold | τ_R | 0.5 |
-| Reweighting decay | λ | 2.0 |
-| Surgery strength | γ | 0.8 |
-| Projection threshold | ρ | 0.7 |
+| Parameter | Symbol | Default | Description |
+|-----------|--------|---------|-------------|
+| Alignment weight | α | 1.0 | Weight for alignment component in ShortcutScore |
+| Concentration weight | β | 1.0 | Weight for concentration component |
+| Alignment threshold | τ_A | 0.3 | Threshold: shortcut if alignment < τ_A |
+| Concentration threshold | τ_R | 0.5 | Threshold: shortcut if concentration > τ_R |
+| Reweighting strength | λ | 2.0 | Exponential decay rate for sample weights |
+| Projection strength | γ | 0.8 | Gradient alignment projection intensity |
+| Suppression strength | ρ | 0.7 | Answer-gradient suppression intensity |
+
+All SART hyperparameters can be overridden via the `cfg` dict passed to `train_our_method()`, or searched automatically via `hp_search.py`.
 
 ## Citation
 
