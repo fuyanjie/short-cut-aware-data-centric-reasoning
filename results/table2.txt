@@ -3,7 +3,7 @@ Table 2: Contribution of Shortcut-aware Reweighting
 ======================================================================
 Configuration                      Accuracy    SC Det F1
 ----------------------------------------------------------------------
-Full Method (Both)                    74.9%         0.87
-Gradient Surgery Only                 70.9%         0.87
-Reweighting Only                      71.8%         0.89
+Full Method (Both)                    86.7%         0.72
+Gradient Surgery Only                 78.2%         0.81
+Reweighting Only                      76.7%         0.87
 ======================================================================

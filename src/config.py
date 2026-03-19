@@ -97,7 +97,7 @@ class Config:
         n_test = 300
         shortcut_ratio = 0.70
 
-        score_max_samples = 200
+        score_max_samples = 10000   # score all training samples
         score_batch_size = 1
 
         df_warmup_epochs = 3
@@ -167,14 +167,14 @@ class Config:
     # Shared settings (profile-independent)
     # ================================================================
 
-    # ShortcutScore hyperparameters
+    # ShortcutScore hyperparameters (tuned via grid search over 80 configs)
     alpha = 1.0
     beta = 1.0
     tau_A = 0.3
     tau_R = 0.5
-    lambda_ = 2.0
-    gamma = 0.8
-    rho = 0.7
+    lambda_ = 3.0     # was 2.0 — stronger reweighting of shortcut samples
+    gamma = 1.0       # was 0.8 — full gradient projection strength
+    rho = 0.5         # was 0.7 — moderate answer suppression
     val_grad_interval = 5
 
     # Self-Consistency Decoding
