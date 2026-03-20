@@ -3,8 +3,8 @@ Table 3: Contribution of Gradient Surgery
 ================================================================================
 Configuration                    Accuracy   Robustness   Grad Align
 --------------------------------------------------------------------------------
-Standard FT (Baseline)              68.2%        24.9%        -0.18
-Gradient Surgery Only               78.2%        36.0%        -0.06
-Reweighting Only                    76.7%        51.3%        -0.11
-Full Method (Both)                  86.7%        68.9%        -0.01
+Standard FT (Baseline)              68.8%        19.4%        -0.08
+Gradient Surgery Only               73.5%        40.5%        -0.14
+Reweighting Only                    75.2%        40.1%        -0.06
+Full Method (Both)                  92.5%        87.9%        -0.03
 ================================================================================

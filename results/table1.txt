@@ -3,19 +3,19 @@ Table 1: Overall Method Performance and Baseline Superiority
 ====================================================================================================
 Method                           Accuracy   Robustness    Reasoning  SC Det F1
 ------------------------------------------------------------------------------------------
-Standard Fine-Tuning                68.2%        24.9%        53.8%          -
-Self-Consistency Decoding           69.1%        24.7%        53.8%          -
-Data Filtering                      56.4%        50.4%        45.1%       0.60
-JTT (Just Train Twice)              70.0%        24.0%        55.8%          -
-Focal Loss                          66.7%        24.4%        52.0%          -
-Group DRO                           73.8%        40.9%        60.9%          -
-IRM                                 74.4%        40.0%        61.3%          -
-V-REx                               74.2%        44.2%        61.6%          -
-Fishr                               66.4%        24.7%        51.6%          -
-LfF                                 67.8%        23.1%        53.1%          -
-Influence Filtering                 74.4%        54.9%        63.6%          -
-Meta-Reweighting                    67.8%        22.4%        52.4%          -
-Our Method (Full)                   86.7%        68.9%        79.1%       0.72
+Standard Fine-Tuning                68.8%        19.4%        55.9%          -
+Self-Consistency Decoding           69.1%        23.3%        55.9%          -
+Data Filtering                      74.7%        54.6%        64.7%       0.69
+JTT (Just Train Twice)              67.9%        19.0%        54.9%          -
+Focal Loss                          68.2%        18.2%        55.4%          -
+Group DRO                           73.5%        36.0%        61.5%          -
+IRM                                 73.3%        34.4%        61.5%          -
+V-REx                               72.1%        34.9%        60.6%          -
+Fishr                               68.1%        16.7%        56.3%          -
+LfF                                 69.0%        19.4%        56.3%          -
+Influence Filtering                 76.0%        47.7%        68.4%          -
+Meta-Reweighting                    69.5%        19.3%        57.0%          -
+Our Method (Full)                   92.5%        87.9%        85.5%       0.64
 ==========================================================================================
 
 Per-Dataset Breakdown:
@@ -23,50 +23,50 @@ Per-Dataset Breakdown:
   Dataset: Math-Arithmetic
   Method                          Acc Clean  Acc Perturb    Reasoning
   ----------------------------------------------------------------------
-  Standard Fine-Tuning                76.7%        13.3%        76.7%
-  Self-Consistency Decoding           78.7%        16.0%        76.7%
-  Data Filtering                      44.0%        30.7%        44.0%
-  JTT (Just Train Twice)              76.7%        13.3%        76.7%
-  Focal Loss                          76.7%        13.3%        76.7%
-  Group DRO                           84.0%        45.3%        84.0%
-  IRM                                 84.7%        44.7%        84.7%
-  V-REx                               84.0%        48.7%        84.0%
-  Fishr                               76.7%        13.3%        76.7%
-  LfF                                 76.7%        13.3%        76.7%
-  Influence Filtering                 92.7%        82.7%        92.7%
-  Meta-Reweighting                    76.7%        13.3%        76.7%
-  Our Method (Full)                   96.0%        74.0%        96.0%
+  Standard Fine-Tuning                77.6%         3.2%        77.6%
+  Self-Consistency Decoding           78.4%        14.6%        77.6%
+  Data Filtering                      82.6%        26.6%        82.6%
+  JTT (Just Train Twice)              77.6%         3.2%        77.6%
+  Focal Loss                          77.6%         3.2%        77.6%
+  Group DRO                           86.8%        48.0%        86.8%
+  IRM                                 85.4%        44.2%        85.4%
+  V-REx                               86.8%        48.0%        86.8%
+  Fishr                               77.6%         3.2%        77.6%
+  LfF                                 77.6%         3.2%        77.6%
+  Influence Filtering                 81.4%        50.4%        81.4%
+  Meta-Reweighting                    77.6%         3.2%        77.6%
+  Our Method (Full)                   98.0%        95.8%        98.0%
 
   Dataset: Financial-Analysis
   Method                          Acc Clean  Acc Perturb    Reasoning
   ----------------------------------------------------------------------
-  Standard Fine-Tuning                58.7%        35.3%        34.7%
-  Self-Consistency Decoding           59.3%        32.7%        34.7%
-  Data Filtering                      55.3%        43.3%        48.7%
-  JTT (Just Train Twice)              62.0%        28.7%        38.7%
-  Focal Loss                          59.3%        32.0%        35.3%
-  Group DRO                           65.3%        36.0%        43.3%
-  IRM                                 66.0%        34.0%        42.7%
-  V-REx                               64.0%        36.7%        42.7%
-  Fishr                               58.0%        30.0%        34.7%
-  LfF                                 56.7%        24.0%        32.7%
-  Influence Filtering                 51.3%        19.3%        44.0%
-  Meta-Reweighting                    58.7%        24.0%        34.7%
-  Our Method (Full)                   73.3%        45.3%        68.7%
+  Standard Fine-Tuning                66.4%        28.6%        46.8%
+  Self-Consistency Decoding           66.2%        28.6%        46.8%
+  Data Filtering                      72.6%        68.4%        60.8%
+  JTT (Just Train Twice)              66.6%        28.6%        46.8%
+  Focal Loss                          65.8%        27.4%        45.8%
+  Group DRO                           68.0%        31.2%        48.8%
+  IRM                                 69.6%        30.8%        51.6%
+  V-REx                               66.8%        29.4%        49.2%
+  Fishr                               65.4%        23.2%        46.8%
+  LfF                                 65.6%        30.4%        45.2%
+  Influence Filtering                 63.4%        23.6%        59.6%
+  Meta-Reweighting                    67.6%        28.4%        47.8%
+  Our Method (Full)                   89.4%        78.8%        87.4%
 
   Dataset: Causal-Reasoning
   Method                          Acc Clean  Acc Perturb    Reasoning
   ----------------------------------------------------------------------
-  Standard Fine-Tuning                69.3%        26.0%        50.0%
-  Self-Consistency Decoding           69.3%        25.3%        50.0%
-  Data Filtering                      70.0%        77.3%        42.7%
-  JTT (Just Train Twice)              71.3%        30.0%        52.0%
-  Focal Loss                          64.0%        28.0%        44.0%
-  Group DRO                           72.0%        41.3%        55.3%
-  IRM                                 72.7%        41.3%        56.7%
-  V-REx                               74.7%        47.3%        58.0%
-  Fishr                               64.7%        30.7%        43.3%
-  LfF                                 70.0%        32.0%        50.0%
-  Influence Filtering                 79.3%        62.7%        54.0%
-  Meta-Reweighting                    68.0%        30.0%        46.0%
-  Our Method (Full)                   90.7%        87.3%        72.7%
+  Standard Fine-Tuning                62.4%        26.4%        43.4%
+  Self-Consistency Decoding           62.8%        26.8%        43.4%
+  Data Filtering                      69.0%        68.8%        50.8%
+  JTT (Just Train Twice)              59.4%        25.2%        40.4%
+  Focal Loss                          61.2%        24.0%        42.8%
+  Group DRO                           65.8%        28.8%        48.8%
+  IRM                                 65.0%        28.2%        47.4%
+  V-REx                               62.8%        27.2%        45.8%
+  Fishr                               61.4%        23.8%        44.4%
+  LfF                                 63.8%        24.6%        46.2%
+  Influence Filtering                 83.2%        69.2%        64.2%
+  Meta-Reweighting                    63.4%        26.2%        45.6%
+  Our Method (Full)                   90.2%        89.0%        71.2%
